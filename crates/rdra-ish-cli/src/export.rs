@@ -14,6 +14,7 @@ use rdra_ish_emit::{
     json_schema::JsonSchemaEmitter,
     mermaid::ErMermaidEmitter,
     openapi::OpenApiJsonEmitter,
+    python::PythonStateUnionEmitter,
     sql::SqlEmitter,
     tla::{self, PrintMode, TlaBundle},
     typescript::TypeScriptStateUnionEmitter,
@@ -51,6 +52,10 @@ pub fn export_output(kind: &ExportKind, dialect: SqlDialect) -> Export {
         ExportKind::TypeScriptStates => Export::Artifact(
             Output::states(TypeScriptStateUnionEmitter::default()),
             "entity-states.ts",
+        ),
+        ExportKind::PythonStates => Export::Artifact(
+            Output::states(PythonStateUnionEmitter::default()),
+            "entity-states.py",
         ),
         ExportKind::MermaidEr => Export::Artifact(Output::declared(ErMermaidEmitter), "er.mmd"),
         ExportKind::Tla => Export::Tla,

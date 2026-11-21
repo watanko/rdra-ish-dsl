@@ -10,6 +10,7 @@
 mod actions;
 mod go;
 pub mod ir;
+mod py;
 mod rust;
 mod states;
 mod ts;
@@ -31,6 +32,7 @@ pub enum Lang {
     TypeScript,
     Rust,
     Go,
+    Python,
 }
 
 #[derive(Clone, Debug)]
@@ -89,6 +91,7 @@ pub fn generate(
         Lang::TypeScript => ts::print(&domain, options),
         Lang::Rust => rust::print(&domain, options),
         Lang::Go => go::print(&domain, options),
+        Lang::Python => py::print(&domain, options),
     })
 }
 

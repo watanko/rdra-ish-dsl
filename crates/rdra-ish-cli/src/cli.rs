@@ -299,7 +299,7 @@ pub(crate) enum Commands {
     Export {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
-        /// Export kind: openapi, asyncapi, dbml, sql, json-schema, typescript-states, mermaid-er, or tla
+        /// Export kind: openapi, asyncapi, dbml, sql, json-schema, typescript-states, python-states, mermaid-er, or tla
         #[arg(long, default_value = "openapi", value_parser = WithRemoved::<ExportKind>::new(REMOVED_EXPORT_KINDS))]
         kind: ExportKind,
         #[arg(short, long, default_value = "out")]
@@ -314,13 +314,13 @@ pub(crate) enum Commands {
         #[arg(long, default_value = "postgres")]
         dialect: SqlDialect,
     },
-    /// [experimental] Print the model's domain types as TypeScript, Rust, or Go code for an
-    /// agent to finish. Outside the compatibility contract: may change or go away in any
+    /// [experimental] Print the model's domain types as TypeScript, Rust, Go, or Python code for
+    /// an agent to finish. Outside the compatibility contract: may change or go away in any
     /// release
     Codegen {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
-        /// Language: ts, rust, or go
+        /// Language: ts, rust, go, or py (python)
         #[arg(long)]
         lang: CodegenLang,
         /// Write to this file instead of stdout
@@ -338,7 +338,7 @@ pub(crate) enum Commands {
     States {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
-        /// Output format: table, csv, json, or typescript
+        /// Output format: table, csv, json, typescript, or python
         #[arg(long, default_value = "table")]
         format: StatesFormat,
         /// Cap on each entity's distinct patterns within one target cone; past it is a
@@ -523,6 +523,8 @@ pub(crate) enum StatesFormat {
     Json,
     #[value(name = "typescript", alias = "type-script")]
     TypeScript,
+    #[value(name = "python", alias = "py")]
+    Python,
 }
 
 #[derive(ValueEnum, Clone, Copy)]
@@ -531,6 +533,8 @@ pub(crate) enum CodegenLang {
     Ts,
     Rust,
     Go,
+    #[value(name = "py", alias = "python")]
+    Python,
 }
 
 #[derive(ValueEnum, Clone)]
@@ -543,6 +547,8 @@ pub(crate) enum ExportKind {
     JsonSchema,
     #[value(alias = "typescript-states")]
     TypeScriptStates,
+    #[value(name = "python-states", alias = "py-states")]
+    PythonStates,
     MermaidEr,
     /// TLA+ / TLC specification (writes companion `.cfg` next to `.tla`)
     Tla,
@@ -948,6 +954,49 @@ mod tests {
                 assert!(matches!(format, StatesFormat::TypeScript));
             }
             _ => panic!("expected states command"),
+        }
+
+        for fmt in ["python", "py"] {
+            let cli =
+                Cli::try_parse_from(["rdra-ish", "states", "sample.rdra", "--format", fmt])
+                    .unwrap();
+            match cli.command {
+                Commands::States { format, .. } => {
+                    assert!(matches!(format, StatesFormat::Python));
+                }
+                _ => panic!("expected states command"),
+            }
+        }
+
+        for lang in ["py", "python"] {
+            let cli =
+                Cli::try_parse_from(["rdra-ish", "codegen", "sample.rdra", "--lang", lang])
+                    .unwrap();
+            match cli.command {
+                Commands::Codegen { lang, .. } => {
+                    assert!(matches!(lang, CodegenLang::Python));
+                }
+                _ => panic!("expected codegen command"),
+            }
+        }
+
+        for kind in ["python-states", "py-states"] {
+            let cli = Cli::try_parse_from([
+                "rdra-ish",
+                "export",
+                "sample.rdra",
+                "--kind",
+                kind,
+                "--out",
+                "states.py",
+            ])
+            .unwrap();
+            match cli.command {
+                Commands::Export { kind, .. } => {
+                    assert!(matches!(kind, ExportKind::PythonStates));
+                }
+                _ => panic!("expected export command"),
+            }
         }
     }
 

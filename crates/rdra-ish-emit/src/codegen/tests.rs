@@ -78,6 +78,22 @@ fn go_snapshot() {
     insta::assert_snapshot!(generated(Lang::Go));
 }
 
+#[test]
+fn python_generates_clean_domain_module() {
+    let code = generated(Lang::Python);
+    assert!(code.contains("from __future__ import annotations"), "{code}");
+    assert!(code.contains("OrderId = _t.NewType(\"OrderId\", int)"), "{code}");
+    assert!(code.contains("class PaymentMethod(str, _enum.Enum):"), "{code}");
+    assert!(code.contains("class OrderPending:"), "{code}");
+    assert!(code.contains("class OrderPaid:"), "{code}");
+    assert!(code.contains("Order: _t.TypeAlias = OrderPending | OrderPaid | OrderCancelled"), "{code}");
+    assert!(code.contains("type: str | None"), "{code}");
+    assert!(code.contains("def order_from_row(row: OrderRow) -> Order | InvalidRow:"), "{code}");
+    assert!(code.contains("def order_to_row(state: Order) -> OrderRow:"), "{code}");
+    assert!(code.contains("def run_pay("), "{code}");
+    assert!(code.contains("def order_rule_violations(row: Order) -> list[str]:"), "{code}");
+}
+
 /// A key column takes its parent's id type, and the obligations name the invariants the
 /// verification checks.
 #[test]

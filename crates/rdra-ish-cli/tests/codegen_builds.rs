@@ -143,6 +143,27 @@ fn go_builds() {
     }
 }
 
+#[test]
+fn python_builds() {
+    if !available("python3") {
+        return;
+    }
+    for sample in samples() {
+        let dir = scratch("py", &sample);
+        let path = generate(&sample, "py", &dir, "domain.py");
+        run(
+            Command::new("python3").args(["-m", "py_compile"]).arg(&path),
+            &format!("py_compile on the codegen of {sample}"),
+        );
+        run(
+            Command::new("python3")
+                .args(["-c", "import domain"])
+                .current_dir(&dir),
+            &format!("importing the Python codegen of {sample}"),
+        );
+    }
+}
+
 /// A model `check` rejects is refused unless `--allow-failing`, which lists its errors as
 /// unmet obligations and narrows no state type.
 #[test]

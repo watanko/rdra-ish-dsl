@@ -63,6 +63,7 @@ pub fn run_codegen(
             CodegenLang::Ts => Lang::TypeScript,
             CodegenLang::Rust => Lang::Rust,
             CodegenLang::Go => Lang::Go,
+            CodegenLang::Python => Lang::Python,
         },
         package: package.to_string(),
         model_path: inputs

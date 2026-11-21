@@ -99,6 +99,7 @@ const EXPECTED: &[(&str, &[(&str, Gate)])] = &[
             ("sql", Note),
             ("json-schema", Note),
             ("type-script-states", Stop),
+            ("python-states", Stop),
             ("mermaid-er", Note),
             ("tla", Note),
         ],

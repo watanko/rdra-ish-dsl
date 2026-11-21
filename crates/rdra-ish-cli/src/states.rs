@@ -6,6 +6,7 @@ use anyhow::Result;
 use rdra_ish_core::lifecycle::{derive_states_built, Bounds, Caps, Site};
 use rdra_ish_core::{entity_state_variants, format_location};
 use rdra_ish_emit::{
+    python::emit_python_state_unions,
     state_pattern::{render_csv, render_json, render_table},
     typescript::emit_typescript_state_unions,
 };
@@ -54,6 +55,9 @@ pub fn run_states(
         })?,
         StatesFormat::TypeScript => {
             emit_typescript_state_unions(&model, &entity_state_variants(&model, &report.views))
+        }
+        StatesFormat::Python => {
+            emit_python_state_unions(&model, &entity_state_variants(&model, &report.views))
         }
     };
     print!("{}", output);

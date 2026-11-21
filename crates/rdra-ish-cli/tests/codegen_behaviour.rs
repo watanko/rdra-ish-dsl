@@ -113,3 +113,20 @@ fn go_behaves() {
         "go test on the driver",
     );
 }
+
+#[test]
+fn python_behaves() {
+    if !available("python3", "--version") {
+        return;
+    }
+    let dir = scratch("py");
+    generate("py", &dir.join("domain.py"));
+    std::fs::copy(fixture().join("driver.py"), dir.join("driver.py")).unwrap();
+    let out = run(
+        Command::new("python3")
+            .arg(dir.join("driver.py"))
+            .current_dir(&dir),
+        "the Python driver",
+    );
+    assert_eq!(out.trim(), "ok");
+}
