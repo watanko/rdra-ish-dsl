@@ -45,6 +45,11 @@
   The food-permit and insurance-claim samples declare `@index` on
   the state columns their timers sweep.
 
+### Fixed
+
+- Python code generation keeps every line and the indentation of multi-line model
+  descriptions instead of silently discarding everything after the first line.
+
 ### Changed
 
 - Skill `rdra-ish-diagram` says how to lay out a PRD and a design document from the model

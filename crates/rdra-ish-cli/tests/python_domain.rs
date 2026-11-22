@@ -12,7 +12,10 @@ dto Envelope "Envelope" {
     active: Bool @default(true)
     count: Int @default(01)
 }
-dto User "User" {
+dto User "User"
+    description "Attributes:
+    name: The user name.
+    note: An optional note." {
     name: String
     note: String @null @default(null)
 }
@@ -70,6 +73,8 @@ from typing import get_args
 import domain as d
 user = d.User(name="before")
 assert user.note is None
+assert "    name: The user name." in d.User.__doc__
+assert "    note: An optional note." in d.User.__doc__
 user.name = "after"
 a = d.Envelope(user=user)
 b = d.Envelope(user=user)

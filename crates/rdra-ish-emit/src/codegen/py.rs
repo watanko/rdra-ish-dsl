@@ -515,7 +515,8 @@ fn comment(line: &str, indent: &str) -> String {
 }
 
 fn escape_docstring(text: &str) -> String {
-    let mut s = one_line(text)
+    let mut s = text
+        .trim_end()
         .replace('\\', "\\\\")
         .replace("\"\"\"", "\\\"\\\"\\\"");
     if s.ends_with('"') {
@@ -527,7 +528,8 @@ fn escape_docstring(text: &str) -> String {
 fn docstring(lines: &[String], indent: &str) -> String {
     let lines: Vec<String> = lines
         .iter()
-        .map(|l| escape_docstring(l))
+        .flat_map(|line| line.lines())
+        .map(escape_docstring)
         .filter(|l| !l.is_empty())
         .collect();
     match lines.as_slice() {
