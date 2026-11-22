@@ -7,7 +7,8 @@ use std::collections::HashSet;
 use crate::analysis::applied_bodies;
 use crate::model::{
     CheckExpr, CmpRhs, ColumnType, ComparisonProp, ConditionKey, CrossCmpRhs, CrossEntityCondition,
-    DerivedExpr, EffectValue, EntityKey, SemanticModel, SetValue, TemporalExpr, TemporalRhs,
+    DerivedExpr, EffectValue, EntityCondition, EntityKey, EntityRule, SemanticModel, SetValue,
+    TemporalExpr, TemporalRhs,
 };
 
 /// The conditions of every `.when(Cond)` guard, on a `transitions` arm, a `chooses` value or a
@@ -43,71 +44,27 @@ impl Named {
                 }
             }
         }
-        let local_eqs = model
+        let local = model
             .forbidden_constraints
             .iter()
+            .chain(&model.required_constraints)
+            .chain(&model.exclusive_constraints)
             .map(|c| (c.entity, &c.conditions))
             .chain(
                 model
-                    .required_constraints
-                    .iter()
-                    .map(|c| (c.entity, &c.conditions)),
-            )
-            .chain(
-                model
-                    .exclusive_constraints
-                    .iter()
-                    .map(|c| (c.entity, &c.conditions)),
-            )
-            .chain(
-                model
                     .entity_invariants
                     .iter()
-                    .map(|c| (c.entity, &c.guards)),
-            )
-            .chain(
-                model
-                    .entity_invariants
-                    .iter()
-                    .map(|c| (c.entity, &c.requireds)),
+                    .flat_map(|c| [(c.entity, &c.guards), (c.entity, &c.requireds)]),
             );
-        for (ek, conds) in local_eqs {
-            for (column, value) in conds {
-                n.value(ek, column, value);
-            }
-        }
-        let local_cmps = model
-            .forbidden_constraints
-            .iter()
-            .map(|c| (c.entity, &c.comparisons))
-            .chain(
-                model
-                    .required_constraints
-                    .iter()
-                    .map(|c| (c.entity, &c.comparisons)),
-            )
-            .chain(
-                model
-                    .exclusive_constraints
-                    .iter()
-                    .map(|c| (c.entity, &c.comparisons)),
-            )
-            .chain(
-                model
-                    .entity_invariants
-                    .iter()
-                    .map(|c| (c.entity, &c.guard_comparisons)),
-            )
-            .chain(
-                model
-                    .entity_invariants
-                    .iter()
-                    .map(|c| (c.entity, &c.required_comparisons)),
-            );
-        for (ek, cmps) in local_cmps {
-            for prop in cmps {
-                if !is_driven(model, ek, prop) {
-                    n.comparison(ek, prop);
+        for (ek, conds) in local {
+            for cond in conds {
+                match cond {
+                    EntityCondition::Equals { column, value } => n.value(ek, column, value),
+                    EntityCondition::Comparison(prop) => {
+                        if !is_driven(model, ek, prop) {
+                            n.comparison(ek, prop);
+                        }
+                    }
                 }
             }
         }
@@ -166,9 +123,9 @@ impl Named {
                     consequent,
                 } => (antecedent, Some(consequent)),
             };
-            n.temporal(model, a);
+            n.temporal(a);
             if let Some(b) = b {
-                n.temporal(model, b);
+                n.temporal(b);
             }
         }
         // A read of a logical `@derived` column reads the columns of its expression.
@@ -276,55 +233,35 @@ impl Named {
         }
     }
 
-    fn temporal(&mut self, model: &SemanticModel, expr: &TemporalExpr) {
+    fn temporal(&mut self, expr: &TemporalExpr) {
         match expr {
             TemporalExpr::Atom(atom) => {
-                let Some(ek) = property_entity(model, atom.entity.as_deref(), &atom.column) else {
-                    return;
-                };
+                let ek = atom.entity;
                 let ordered = atom.op.is_ordered();
                 match &atom.rhs {
                     TemporalRhs::Value(v) if !ordered => self.value(ek, &atom.column, v),
                     TemporalRhs::Values(vs) => {
                         vs.iter().for_each(|v| self.value(ek, &atom.column, v))
                     }
-                    TemporalRhs::Column { entity, column } => {
-                        let rk = property_entity(
-                            model,
-                            entity.as_deref().or(atom.entity.as_deref()),
-                            column,
-                        );
+                    TemporalRhs::Column { entity: rk, column } => {
                         if ordered {
                             self.number(ek, &atom.column);
-                            if let Some(rk) = rk {
-                                self.number(rk, column);
-                            }
+                            self.number(*rk, column);
                         } else {
                             self.name(ek, &atom.column);
-                            if let Some(rk) = rk {
-                                self.name(rk, column);
-                            }
+                            self.name(*rk, column);
                         }
                     }
                     _ => self.number(ek, &atom.column),
                 }
             }
-            TemporalExpr::Not(inner) => self.temporal(model, inner),
+            TemporalExpr::Not(inner) => self.temporal(inner),
             TemporalExpr::And(a, b) | TemporalExpr::Or(a, b) => {
-                self.temporal(model, a);
-                self.temporal(model, b);
+                self.temporal(a);
+                self.temporal(b);
             }
         }
     }
-}
-
-/// A property atom's entity: the named one, or the only entity that has the column.
-pub(super) fn property_entity(
-    model: &SemanticModel,
-    entity: Option<&str>,
-    column: &str,
-) -> Option<EntityKey> {
-    model.property_entity(entity, column)
 }
 
 /// A `drives(UC, E, cmp, bool)` names this comparison, so it reads a proposition var.
@@ -343,16 +280,15 @@ pub(super) fn driven_props(model: &SemanticModel, ek: EntityKey) -> Vec<String> 
         .forbidden_constraints
         .iter()
         .filter(|c| c.entity == ek)
-        .flat_map(|c| c.comparisons.iter())
+        .flat_map(EntityRule::comparisons)
         .chain(
             model
                 .entity_invariants
                 .iter()
                 .filter(|c| c.entity == ek)
                 .flat_map(|c| {
-                    c.guard_comparisons
-                        .iter()
-                        .chain(c.required_comparisons.iter())
+                    EntityCondition::comparisons(&c.guards)
+                        .chain(EntityCondition::comparisons(&c.requireds))
                 }),
         )
         .chain(
@@ -360,14 +296,14 @@ pub(super) fn driven_props(model: &SemanticModel, ek: EntityKey) -> Vec<String> 
                 .required_constraints
                 .iter()
                 .filter(|c| c.entity == ek)
-                .flat_map(|c| c.comparisons.iter()),
+                .flat_map(EntityRule::comparisons),
         )
         .chain(
             model
                 .exclusive_constraints
                 .iter()
                 .filter(|c| c.entity == ek)
-                .flat_map(|c| c.comparisons.iter()),
+                .flat_map(EntityRule::comparisons),
         );
     let effect_props = model
         .proposition_effects

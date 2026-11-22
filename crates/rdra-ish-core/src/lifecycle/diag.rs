@@ -4,7 +4,7 @@ use std::fmt;
 
 use super::lasso::Loop;
 use super::trace::{Inst, Trace};
-use super::types::{ActionOrigin, GuardWhy, InvKind, InvText, LtlKind, ParamRole, Site};
+use super::types::{ActionOrigin, GuardWhy, InvText, LtlKind, ParamRole, Site};
 use crate::model::EntityKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -140,7 +140,6 @@ pub enum StateDiag {
     /// violation, with a shortest trace to it.
     ConstraintViolated {
         name: String,
-        kind: InvKind,
         text: InvText,
         /// The rule's `.label("...")`, when it has one.
         label: Option<String>,
@@ -317,12 +316,6 @@ pub enum StateDiag {
         b: String,
         /// The entities of the shortest key path from `a` to `b`, ends included.
         path: Vec<String>,
-        site: Site,
-    },
-    /// A property atom names a column no single entity owns.
-    UnresolvedPropertyAtom {
-        property: String,
-        column: String,
         site: Site,
     },
     /// An `after(UC).assert` atom reads an entity no step of the use case's run binds, so it
@@ -516,9 +509,6 @@ impl StateDiag {
             StateDiag::UnsupportedComparison { comparison, .. } => {
                 with("UnsupportedComparison", &[comparison])
             }
-            StateDiag::UnresolvedPropertyAtom {
-                property, column, ..
-            } => with("UnresolvedPropertyAtom", &[property, column]),
             StateDiag::UnjoinedGuardRead {
                 condition, usecase, ..
             } => with("UnjoinedGuardRead", &[condition, usecase]),
@@ -617,8 +607,7 @@ impl StateDiag {
             | StateDiag::UnboundCopySource { .. }
             | StateDiag::AmbiguousOwnerLink { .. }
             | StateDiag::UnsupportedComparison { .. }
-            | StateDiag::DerivedColumnRead { .. }
-            | StateDiag::UnresolvedPropertyAtom { .. } => Severity::Error,
+            | StateDiag::DerivedColumnRead { .. } => Severity::Error,
         }
     }
 }
@@ -943,12 +932,6 @@ impl fmt::Display for StateDiag {
             StateDiag::DerivedColumnRead { column, .. } => write!(
                 f,
                 "{column} is derived by arithmetic, which the lifecycle cannot evaluate; compare the columns it reads instead"
-            ),
-            StateDiag::UnresolvedPropertyAtom {
-                property, column, ..
-            } => write!(
-                f,
-                "property {property}: no single entity owns column {column}"
             ),
             StateDiag::UnjoinedGuardRead {
                 condition,

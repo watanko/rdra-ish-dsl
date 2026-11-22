@@ -15,8 +15,8 @@ use crate::{EmitError, Emitter, View};
 use rdra_ish_core::lifecycle::{Bounds, InvKind, Invariant, ModelRef, Scope, TransitionSystem};
 use rdra_ish_core::model::{
     ArithExpr, ArithOperand, CheckExpr, CmpOpModel, CmpRhs, ColumnType, ComparisonProp, DefaultFn,
-    DerivedExpr, EffectValue, Entity, EntityKey, ForeignKey, IdGeneration, ModelColumn, RefAction,
-    RuleRef, SemanticModel, UniqueSource,
+    DerivedExpr, EffectValue, Entity, EntityCondition, EntityKey, ForeignKey, IdGeneration,
+    ModelColumn, RefAction, RuleRef, SemanticModel, UniqueSource,
 };
 use rdra_ish_syntax::ast::ArithOp;
 
@@ -217,7 +217,10 @@ impl<'m> Script<'m> {
             let note = variation_note(variation);
             types.push(match self.dialect {
                 Dialect::Postgres => {
-                    format!("{note}\n{}", create_enum(&variation.id, &variation.values))
+                    format!(
+                        "{note}\n{}",
+                        create_enum(&variation.id, &variation.value_names())
+                    )
                 }
                 Dialect::Sqlite => note,
             });
@@ -262,7 +265,7 @@ impl<'m> Script<'m> {
     fn enum_values(&self, column: &ModelColumn) -> Option<Vec<String>> {
         match &column.col_type {
             ColumnType::Enum(values) => Some(values.clone()),
-            ColumnType::Variation(key) => self.model.variations.get(*key).map(|v| v.values.clone()),
+            ColumnType::Variation(key) => self.model.variations.get(*key).map(|v| v.value_names()),
             _ => None,
         }
     }
@@ -601,7 +604,7 @@ impl<'m> Script<'m> {
             let names: Vec<&Invariant> = self
                 .invariants
                 .iter()
-                .filter(|inv| inv.kind == InvKind::Check && inv.site.fact == fact)
+                .filter(|inv| inv.text.kind() == InvKind::Check && inv.site.fact == fact)
                 .collect();
             for (i, check) in column.check_constraints.iter().enumerate() {
                 let name = names.get(i).map_or_else(
@@ -624,9 +627,9 @@ impl<'m> Script<'m> {
                 &ModelRef::Forbidden(i),
                 format!("Forbidden_{}_{i}", entity.id),
             );
-            let conds = self.conjuncts(entity, &c.conditions, &c.comparisons);
+            let conds = self.conjuncts(entity, &c.conditions);
             let check = conds.map(|c| format!("NOT ({})", and(&c)));
-            let text = local_text(&c.conditions, &c.comparisons);
+            let text = local_text(&c.conditions);
             rules.push(self.rule(name, check, text, self.guarded(RuleRef::Forbidden(i))));
         }
         for (i, c) in model.entity_invariants.iter().enumerate() {
@@ -637,8 +640,8 @@ impl<'m> Script<'m> {
                 &ModelRef::EntityInvariant(i),
                 format!("Inv_{}_{i}", entity.id),
             );
-            let guards = self.conjuncts(entity, &c.guards, &c.guard_comparisons);
-            let reqs = self.conjuncts(entity, &c.requireds, &c.required_comparisons);
+            let guards = self.conjuncts(entity, &c.guards);
+            let reqs = self.conjuncts(entity, &c.requireds);
             let check = match (guards, reqs) {
                 (Some(g), Some(r)) if !g.is_empty() => {
                     Some(format!("NOT ({}) OR ({})", and(&g), and(&r)))
@@ -648,8 +651,8 @@ impl<'m> Script<'m> {
             };
             let text = format!(
                 "when {} then {}",
-                local_text(&c.guards, &c.guard_comparisons),
-                local_text(&c.requireds, &c.required_comparisons)
+                local_text(&c.guards),
+                local_text(&c.requireds)
             );
             rules.push(self.rule(name, check, text, self.guarded(RuleRef::Invariant(i))));
         }
@@ -661,10 +664,8 @@ impl<'m> Script<'m> {
                 &ModelRef::Required(i),
                 format!("Required_{}_{i}", entity.id),
             );
-            let check = self
-                .conjuncts(entity, &c.conditions, &c.comparisons)
-                .map(|c| and(&c));
-            let text = local_text(&c.conditions, &c.comparisons);
+            let check = self.conjuncts(entity, &c.conditions).map(|c| and(&c));
+            let text = local_text(&c.conditions);
             rules.push(self.rule(name, check, text, false));
         }
         for (i, c) in model.exclusive_constraints.iter().enumerate() {
@@ -676,16 +677,14 @@ impl<'m> Script<'m> {
                 format!("Exclusive_{}_{i}", entity.id),
             );
             // At most one of the conditions holds.
-            let check = self
-                .conjuncts(entity, &c.conditions, &c.comparisons)
-                .map(|conds| {
-                    let terms: Vec<String> = conds
-                        .iter()
-                        .map(|c| format!("(CASE WHEN {c} THEN 1 ELSE 0 END)"))
-                        .collect();
-                    format!("{} <= 1", terms.join(" + "))
-                });
-            let text = local_text(&c.conditions, &c.comparisons);
+            let check = self.conjuncts(entity, &c.conditions).map(|conds| {
+                let terms: Vec<String> = conds
+                    .iter()
+                    .map(|c| format!("(CASE WHEN {c} THEN 1 ELSE 0 END)"))
+                    .collect();
+                format!("{} <= 1", terms.join(" + "))
+            });
+            let text = local_text(&c.conditions);
             rules.push(self.rule(name, check, text, false));
         }
         rules
@@ -718,7 +717,7 @@ impl<'m> Script<'m> {
         self.invariants
             .iter()
             .filter_map(|inv| {
-                let why = match inv.kind {
+                let why = match inv.text.kind() {
                     InvKind::CrossForbidden | InvKind::CrossInvariant => "several entities",
                     InvKind::Quantifier => "related rows",
                     InvKind::MinCard => "minimum cardinality",
@@ -741,14 +740,9 @@ impl<'m> Script<'m> {
     }
 
     /// Each equality and comparison as a two-valued SQL condition; `None` when one reads `now`.
-    fn conjuncts(
-        &self,
-        entity: &Entity,
-        equalities: &[(String, EffectValue)],
-        comparisons: &[ComparisonProp],
-    ) -> Option<Vec<String>> {
+    fn conjuncts(&self, entity: &Entity, conds: &[EntityCondition]) -> Option<Vec<String>> {
         let mut out = Vec::new();
-        for (column, value) in equalities {
+        for (column, value) in EntityCondition::equals(conds) {
             out.push(self.compare(
                 entity,
                 column,
@@ -756,7 +750,7 @@ impl<'m> Script<'m> {
                 &CmpRhs::Value(value.clone()),
             )?);
         }
-        for prop in comparisons {
+        for prop in EntityCondition::comparisons(conds) {
             out.push(self.compare(entity, &prop.lhs_column, prop.op, &prop.rhs)?);
         }
         Some(out)
@@ -796,12 +790,9 @@ impl<'m> Script<'m> {
             // A list of plain values is `IN (...)`; a null `col` is in no list and outside
             // every one, as `==` and `!=` read it.
             CmpRhs::Values(values)
-                if values.iter().all(|v| {
-                    !matches!(
-                        v.normalize(),
-                        EffectValue::Null | EffectValue::Present | EffectValue::TypedPresent(_)
-                    )
-                }) =>
+                if values
+                    .iter()
+                    .all(|v| !matches!(v, EffectValue::Null | EffectValue::Present)) =>
             {
                 let list: Vec<String> = values.iter().map(literal).collect();
                 let list = list.join(", ");
@@ -829,7 +820,7 @@ impl<'m> Script<'m> {
                 CmpOpModel::Ne => format!("{col} IS NOT NULL"),
                 _ => format!("{col} IS NULL"),
             },
-            CmpRhs::Value(EffectValue::Present | EffectValue::TypedPresent(_)) => match op {
+            CmpRhs::Value(EffectValue::Present) => match op {
                 CmpOpModel::Ne => format!("{col} IS NULL"),
                 _ => format!("{col} IS NOT NULL"),
             },
@@ -940,13 +931,13 @@ fn and(parts: &[String]) -> String {
 }
 
 fn literal(value: &EffectValue) -> String {
-    match value.normalize() {
+    match value {
         EffectValue::EnumVariant(v) => string(v),
         EffectValue::Bool(true) => "TRUE".to_string(),
         EffectValue::Bool(false) => "FALSE".to_string(),
         EffectValue::Int(n) => n.to_string(),
         EffectValue::Null => "NULL".to_string(),
-        EffectValue::Present | EffectValue::TypedPresent(_) => "NULL".to_string(),
+        EffectValue::Present => "NULL".to_string(),
     }
 }
 

@@ -133,8 +133,6 @@ pub struct RecordDecl {
 /// output must keep it.
 #[derive(Clone, Debug)]
 pub struct Obligation {
-    /// `O1`, `O2`, ...
-    pub id: String,
     /// The invariant `check` and `verify` name it by, when they check it.
     pub invariant: Option<String>,
     pub text: String,
@@ -229,6 +227,15 @@ pub struct FnDecl {
     pub marks_out: Vec<MarkOut>,
 }
 
+impl FnDecl {
+    /// Row `r` of an `Expr`: an argument row, or a quantifier's element after them.
+    pub fn row(&self, r: usize) -> &RowParam {
+        self.rows
+            .get(r)
+            .unwrap_or_else(|| &self.elems[r - self.rows.len()])
+    }
+}
+
 /// A run mark: the id of a row step `step` of a split use case wrote, which the next step
 /// takes (docs/design/algebraic-codegen.md, "Use cases split into transactions").
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,8 +285,8 @@ pub enum MarkSource {
 pub struct RowParam {
     /// snake_case.
     pub name: String,
-    /// The action param this row binds.
-    pub param: usize,
+    /// The action param this row binds; none for a row a quantifier or a validator binds.
+    pub param: Option<usize>,
     /// For a state type: the tag column and the source state.
     pub state: Option<(String, String)>,
     pub entity: String,
@@ -365,7 +372,7 @@ pub enum Expr {
         op: CmpOp,
         value: i64,
     },
-    /// Compare two numeric columns, requiring every nullable operand to be present.
+    /// Numeric comparisons preserve the transition system's null equality and ordering.
     FieldCmp {
         left: usize,
         left_field: Field,
@@ -467,7 +474,6 @@ pub enum Assigned {
         field: Field,
         wrap: bool,
     },
-    /// The id of the row a mark argument names (a row an earlier step wrote).
     /// A second lifecycle column: the `to` of the arm whose `from` the row holds.
     Switch {
         row: usize,
@@ -481,6 +487,7 @@ pub enum Assigned {
         param: usize,
         wrap: bool,
     },
+    /// The id of the row a mark argument names (a row an earlier step wrote).
     MarkId {
         mark: usize,
         wrap: bool,
@@ -536,6 +543,8 @@ pub struct EventIn {
     /// snake_case.
     pub name: String,
     pub ty: String,
+    /// The event's id.
+    pub event: String,
 }
 
 /// A use case the generator printed no function for, and why.

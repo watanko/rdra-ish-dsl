@@ -2,14 +2,10 @@
 
 use super::*;
 
-pub(super) fn local_text(
-    equalities: &[(String, EffectValue)],
-    comparisons: &[ComparisonProp],
-) -> String {
-    equalities
-        .iter()
+pub(super) fn local_text(conds: &[EntityCondition]) -> String {
+    EntityCondition::equals(conds)
         .map(|(c, v)| format!("{c} == {}", v.literal()))
-        .chain(comparisons.iter().map(ComparisonProp::display))
+        .chain(EntityCondition::comparisons(conds).map(ComparisonProp::display))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -17,13 +13,16 @@ pub(super) fn local_text(
 pub(super) fn inv_text(inv: &Invariant) -> String {
     use rdra_ish_core::lifecycle::InvText;
     match &inv.text {
-        InvText::Conditions(c) => c.clone(),
-        InvText::WhenThen { guards, requireds } => format!("when {guards} then {requireds}"),
-        InvText::Cross {
+        InvText::Forbidden(c)
+        | InvText::Required(c)
+        | InvText::Exclusive(c)
+        | InvText::Check(c) => c.clone(),
+        InvText::Invariant { guards, requireds } => format!("when {guards} then {requireds}"),
+        InvText::CrossForbidden {
             entities,
             conditions,
         } => format!("{entities}: {conditions}"),
-        InvText::CrossWhenThen {
+        InvText::CrossInvariant {
             entities,
             guards,
             requireds,
@@ -100,10 +99,9 @@ pub(super) fn variation_note(variation: &rdra_ish_core::model::Variation) -> Str
     let values: Vec<String> = variation
         .values
         .iter()
-        .zip(&variation.labels)
-        .map(|(value, label)| match label {
-            Some(label) => format!("{value} = {}", one_line(label)),
-            None => value.clone(),
+        .map(|v| match &v.label {
+            Some(label) => format!("{} = {}", v.value, one_line(label)),
+            None => v.value.clone(),
         })
         .collect();
     format!(

@@ -84,6 +84,25 @@ pub(crate) fn register_instance(
         );
     }
 
+    let module = model
+        .import_scopes
+        .module_for_source(ctx.source_id)
+        .map(str::to_string);
+    if model
+        .symbols
+        .declares(&inst.id, inst.kind.name(), module.as_deref())
+    {
+        push_error(
+            ctx,
+            diags,
+            inst.span.clone(),
+            RdraError::DuplicateDefinition {
+                id: inst.id.clone(),
+            },
+        );
+        return;
+    }
+
     let node = match inst.kind {
         Kind::Actor => {
             let k = model.actors.insert(Actor {
@@ -354,44 +373,27 @@ pub(crate) fn register_instance(
                 values: inst
                     .variation_values
                     .iter()
-                    .map(|v| v.value.clone())
-                    .collect(),
-                labels: inst
-                    .variation_values
-                    .iter()
-                    .map(|v| v.label.clone())
+                    .map(|v| EnumValue {
+                        value: v.value.clone(),
+                        label: v.label.clone(),
+                    })
                     .collect(),
             });
             NodeRef::Variation(k)
         }
     };
 
-    if model.symbols.insert_in_module(
-        inst.id.clone(),
-        node,
-        model
-            .import_scopes
-            .module_for_source(ctx.source_id)
-            .map(str::to_string),
-    ) {
-        push_error(
-            ctx,
-            diags,
-            inst.span.clone(),
-            RdraError::DuplicateDefinition {
-                id: inst.id.clone(),
-            },
-        );
-    } else {
-        model.decl_sites.insert(
-            inst.kind.name(),
-            &inst.id,
-            DeclSite {
-                source_id: ctx.source_id,
-                span: inst.span.clone(),
-            },
-        );
-    }
+    model
+        .symbols
+        .insert_in_module(inst.id.clone(), node, module);
+    model.decl_sites.insert(
+        inst.kind.name(),
+        &inst.id,
+        DeclSite {
+            source_id: ctx.source_id,
+            span: inst.span.clone(),
+        },
+    );
 }
 
 /// Resolve DTO bodies after every declaration has a symbol, including forward references.
@@ -578,7 +580,7 @@ fn ast_column_to_model(
                                 .annotations
                                 .iter()
                                 .any(|ann| matches!(ann, Annotation::Null));
-                        if !(null_default || variation.values.iter().any(|value| value == v)) {
+                        if !(null_default || variation.has_value(v)) {
                             push_error(
                                 ctx,
                                 diags,
@@ -586,7 +588,7 @@ fn ast_column_to_model(
                                 RdraError::InvalidVariationValue {
                                     variation: variation.id.clone(),
                                     value: v.clone(),
-                                    allowed: variation.values.join(", "),
+                                    allowed: variation.value_names().join(", "),
                                 },
                             );
                         }
@@ -678,7 +680,7 @@ fn ast_column_to_model(
                 let allowed = match &mc.col_type {
                     ColumnType::Enum(declared) => Some(declared.clone()),
                     ColumnType::Variation(key) => {
-                        model.variations.get(*key).map(|v| v.values.clone())
+                        model.variations.get(*key).map(|v| v.value_names())
                     }
                     _ => None,
                 };

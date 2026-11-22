@@ -493,8 +493,6 @@ fn a_range_out_of_bounds_on_the_parent_side_or_on_an_nm_is_an_error() {
     );
 }
 
-// ── The one join rule (#73) ─────────────────────────────────────────────────
-
 /// Permit is registered under its application (1:1, role `Application` by default), and an
 /// application `renews` a permit: two keys between one pair, in opposite directions.
 const RENEWS: &str = r#"
@@ -773,5 +771,26 @@ fn a_links_without_a_usable_key_is_an_error_naming_the_fix() {
             .iter()
             .any(|e| matches!(e, RdraError::UnknownOwnerRole { role, .. } if role == "nope")),
         "{errors:?}"
+    );
+}
+
+#[test]
+fn a_key_copied_from_an_enum_key_keeps_its_value_labels() {
+    let model = built(
+        r#"
+entity Plan "Plan" { code: Enum(basic "ベーシック", pro "プロ") @pk }
+entity Contract "Contract" { id: Int @pk }
+relate(Contract, Plan, N:1)
+"#,
+    );
+    let contract = &model.entities[entity_key(&model, "Contract")];
+    let copied = contract
+        .columns
+        .iter()
+        .find(|c| matches!(c.col_type, ColumnType::Enum(_)))
+        .expect("Contract gets a key column copied from Plan.code");
+    assert_eq!(
+        copied.value_labels,
+        [Some("ベーシック".to_string()), Some("プロ".to_string())]
     );
 }

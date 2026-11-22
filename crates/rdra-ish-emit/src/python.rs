@@ -178,15 +178,9 @@ fn py_type_for_field(
         StateFieldValue::Null => "None".to_string(),
         // The value is one of the bounded domain `0..=int_max`, not a fact of the row.
         StateFieldValue::Int(_) => "int".to_string(),
-        StateFieldValue::Present { pg_type } => match pg_type.as_deref() {
-            Some("timestamptz" | "timestamp") => "datetime.datetime".to_string(),
-            Some("date") => "datetime.date".to_string(),
-            Some("uuid") => "str".to_string(),
-            Some("json" | "jsonb") => "dict[str, _t.Any]".to_string(),
-            Some("money" | "decimal") => "float".to_string(),
-            Some(_) => "str".to_string(),
-            None => declared.map_or_else(|| "_t.Any".to_string(), |t| py_column_type(model, t)),
-        },
+        StateFieldValue::Present => {
+            declared.map_or_else(|| "_t.Any".to_string(), |t| py_column_type(model, t))
+        }
     }
 }
 
@@ -202,10 +196,17 @@ fn py_column_type(model: &SemanticModel, col_type: &ColumnType) -> String {
         ColumnType::Date => "datetime.date".to_string(),
         ColumnType::Bool => "bool".to_string(),
         ColumnType::Enum(values) => literal_union(values),
-        ColumnType::Variation(key) => model
-            .variations
-            .get(*key)
-            .map_or_else(|| "str".to_string(), |v| literal_union(&v.values)),
+        ColumnType::Variation(key) => model.variations.get(*key).map_or_else(
+            || "str".to_string(),
+            |v| {
+                literal_union(
+                    &v.values
+                        .iter()
+                        .map(|value| value.value.clone())
+                        .collect::<Vec<_>>(),
+                )
+            },
+        ),
     }
 }
 

@@ -1,8 +1,9 @@
 //! `diagram` CLI command.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use rdra_ish_core::model::{NodeRef, RelKind, SemanticModel};
 use rdra_ish_emit::{
     mermaid::{
@@ -11,34 +12,18 @@ use rdra_ish_emit::{
         RequirementMermaidEmitter, RobustnessMermaidEmitter, ScreenMermaidEmitter,
         SequenceMermaidEmitter, StateMermaidEmitter, UsecaseMermaidEmitter,
     },
-    unknown_diagram_filter_kinds, Filter, Scope, StateView, View,
+    unknown_diagram_filter_kinds, EmitError, Filter, Scope, StateView, View,
 };
 use std::fs;
 
-use crate::cli::DiagramKind;
-use crate::lifecycle_gate::{Gated, Output};
-use crate::load::reject_model_errors;
-use rdra_ish_core::{load_project, Project};
+use crate::cli::{DiagramArgs, DiagramKind};
+use crate::lifecycle_gate::{Gated, Lifecycle, Output};
+use crate::load::load_clean;
 
 /// Mermaid's default `maxTextSize`: a diagram with more characters is not rendered.
 const MERMAID_MAX_TEXT: usize = 50_000;
 /// Mermaid's default `maxEdges`: a flowchart with more edges is not rendered.
 const MERMAID_MAX_EDGES: usize = 500;
-
-pub struct DiagramRequest {
-    pub inputs: Vec<PathBuf>,
-    pub kind: DiagramKind,
-    pub all: bool,
-    pub buc: Vec<String>,
-    pub usecase: Vec<String>,
-    pub entity: Vec<String>,
-    pub actor: Vec<String>,
-    pub node_kind: Vec<String>,
-    pub edge_kind: Vec<String>,
-    pub title: bool,
-    pub legend: bool,
-    pub out: Option<PathBuf>,
-}
 
 /// What one diagram draws: its scope, and the entities `--entity` names for the kinds that
 /// read them.
@@ -47,8 +32,8 @@ struct Shot {
     entities: Vec<String>,
 }
 
-pub fn run_diagram(request: DiagramRequest) -> Result<()> {
-    let DiagramRequest {
+pub fn run_diagram(args: DiagramArgs) -> Result<()> {
+    let DiagramArgs {
         inputs,
         kind,
         all,
@@ -61,15 +46,10 @@ pub fn run_diagram(request: DiagramRequest) -> Result<()> {
         title,
         legend,
         out,
-    } = request;
+        format: _,
+    } = args;
     let inputs = inputs.as_slice();
-    let Project {
-        program,
-        model,
-        diags,
-        ..
-    } = load_project(inputs, None)?;
-    reject_model_errors(&program, &diags)?;
+    let (program, model) = load_clean(inputs)?;
     let model_path = inputs
         .iter()
         .map(|input| input.display().to_string())
@@ -233,7 +213,8 @@ pub fn run_diagram(request: DiagramRequest) -> Result<()> {
             eprintln!("warning: {}", diag.error);
         }
     }
-    let gated = diagram_output(&kind).gate(&program, &model)?;
+    let lifecycle = Lifecycle::new(&program, &model);
+    let gated = diagram_output(&kind).gate(&lifecycle)?;
     let text = render(
         &gated,
         &model,
@@ -243,8 +224,8 @@ pub fn run_diagram(request: DiagramRequest) -> Result<()> {
         node_kind,
         edge_kind,
     )?;
-    for line in findings(&text, &kind) {
-        eprintln!("{line}");
+    if let Some(finding) = Finding::of(&text) {
+        eprintln!("{}", finding.message(&kind));
     }
     let text = dress.apply(text, &kind, &about);
     match out {
@@ -328,25 +309,27 @@ fn write_all(
         DiagramKind::Flow,
         DiagramKind::Sequence,
     ];
+    let lifecycle = Lifecycle::new(program, model);
     let mut written = 0;
     let mut empty = 0;
     let mut write = |kind: &DiagramKind, gated: &Gated, name: String, shot: Shot, about: &str| {
         let text = match render(gated, model, kind, shot, model_path, Vec::new(), Vec::new()) {
             Ok(text) => text,
             // A sequence diagram of a BUC without use cases.
-            Err(_) => {
+            Err(err) if matches!(err.downcast_ref(), Some(EmitError::NoSequence)) => {
                 empty += 1;
                 return Ok(());
             }
+            Err(err) => return Err(err.context(format!("failed to draw {name}"))),
         };
-        let lines = findings(&text, kind);
-        if lines.iter().any(|l| l.starts_with("note: nothing to draw")) {
+        let finding = Finding::of(&text);
+        if matches!(finding, Some(Finding::NothingToDraw)) {
             empty += 1;
             return Ok(());
         }
         let path = dir.join(format!("{name}.mmd"));
-        for line in lines {
-            eprintln!("{}: {line}", path.display());
+        if let Some(finding) = finding {
+            eprintln!("{}: {}", path.display(), finding.message(kind));
         }
         fs::write(&path, dress.apply(text, kind, about))
             .with_context(|| format!("failed to write {}", path.display()))?;
@@ -357,7 +340,7 @@ fn write_all(
     for kind in whole.iter().chain(&per_buc) {
         let name = kind_name(kind);
         // A model with lifecycle errors has no state diagram; the rest are still written.
-        let gated = match diagram_output(kind).gate(program, model) {
+        let gated = match diagram_output(kind).gate(&lifecycle) {
             Ok(gated) => gated,
             Err(err) => {
                 eprintln!("note: --kind {name} is left out: {err}");
@@ -398,46 +381,57 @@ fn write_all(
     Ok(())
 }
 
-/// What a reader of the diagram should know before rendering it: that Mermaid's default
-/// limits refuse it, or that it draws nothing.
-fn findings(text: &str, kind: &DiagramKind) -> Vec<String> {
-    let mut out = Vec::new();
-    let name = kind_name(kind);
-    if text.lines().any(|l| l.trim() == "%% kinds: (none)") {
-        out.push(format!(
-            "note: nothing to draw: the model declares nothing --kind {name} draws in this scope"
-        ));
-        return out;
+/// What a reader of the diagram should know before rendering it: that it draws nothing, or
+/// that Mermaid's default limits refuse it.
+enum Finding {
+    NothingToDraw,
+    TooLarge { chars: usize, edges: Option<usize> },
+}
+
+impl Finding {
+    fn of(text: &str) -> Option<Finding> {
+        if text.lines().any(|l| l.trim() == "%% kinds: (none)") {
+            return Some(Finding::NothingToDraw);
+        }
+        let chars = text.chars().count();
+        let flowchart = text.lines().any(|l| l.starts_with("flowchart"));
+        let edges = flowchart.then(|| {
+            text.lines()
+                .filter(|l| !l.trim_start().starts_with("%%"))
+                .filter(|l| ["-->", "-.->", "==>", "---"].iter().any(|a| l.contains(a)))
+                .count()
+        });
+        (chars > MERMAID_MAX_TEXT || edges.unwrap_or(0) > MERMAID_MAX_EDGES)
+            .then_some(Finding::TooLarge { chars, edges })
     }
-    let chars = text.chars().count();
-    let flowchart = text.lines().any(|l| l.starts_with("flowchart"));
-    let edges = if flowchart {
-        text.lines()
-            .filter(|l| !l.trim_start().starts_with("%%"))
-            .filter(|l| ["-->", "-.->", "==>", "---"].iter().any(|a| l.contains(a)))
-            .count()
-    } else {
-        0
-    };
-    if chars > MERMAID_MAX_TEXT || edges > MERMAID_MAX_EDGES {
-        let narrow = match kind {
-            DiagramKind::Usecase | DiagramKind::Robustness => {
-                "--buc, --usecase, --actor, or --entity"
+
+    fn message(&self, kind: &DiagramKind) -> String {
+        let name = kind_name(kind);
+        match self {
+            Finding::NothingToDraw => format!(
+                "note: nothing to draw: the model declares nothing --kind {name} draws in this scope"
+            ),
+            Finding::TooLarge { chars, edges } => {
+                let narrow = match kind {
+                    DiagramKind::Usecase | DiagramKind::Robustness => {
+                        "--buc, --usecase, --actor, or --entity"
+                    }
+                    DiagramKind::Er | DiagramKind::Information => "--buc or --entity",
+                    DiagramKind::Rdra => {
+                        "--buc, --node-kind, or --edge-kind, or use a narrower --kind"
+                    }
+                    _ => "--buc",
+                };
+                let size = match edges {
+                    Some(edges) => format!("{chars} characters and {edges} edges"),
+                    None => format!("{chars} characters"),
+                };
+                format!(
+                    "warning: this diagram has {size}; Mermaid's defaults stop at {MERMAID_MAX_TEXT} characters (maxTextSize) and {MERMAID_MAX_EDGES} edges (maxEdges), so it does not render as is. Narrow it with {narrow}, or raise the limits in the renderer's config"
+                )
             }
-            DiagramKind::Er | DiagramKind::Information => "--buc or --entity",
-            DiagramKind::Rdra => "--buc, --node-kind, or --edge-kind, or use a narrower --kind",
-            _ => "--buc",
-        };
-        let size = if flowchart {
-            format!("{chars} characters and {edges} edges")
-        } else {
-            format!("{chars} characters")
-        };
-        out.push(format!(
-            "warning: this diagram has {size}; Mermaid's defaults stop at {MERMAID_MAX_TEXT} characters (maxTextSize) and {MERMAID_MAX_EDGES} edges (maxEdges), so it does not render as is. Narrow it with {narrow}, or raise the limits in the renderer's config"
-        ));
+        }
     }
-    out
 }
 
 /// `--title` and `--legend`: what a rendered diagram shows of itself. The `%%` header says
@@ -583,23 +577,11 @@ fn use_cases_touching(model: &SemanticModel, entities: &[String]) -> Vec<String>
 }
 
 /// The `--kind` value.
-fn kind_name(kind: &DiagramKind) -> &'static str {
-    match kind {
-        DiagramKind::Rdra => "rdra",
-        DiagramKind::Context => "context",
-        DiagramKind::Requirement => "requirement",
-        DiagramKind::Business => "business",
-        DiagramKind::Usecase => "usecase",
-        DiagramKind::Robustness => "robustness",
-        DiagramKind::Sequence => "sequence",
-        DiagramKind::Information => "information",
-        DiagramKind::Condition => "condition",
-        DiagramKind::Flow => "flow",
-        DiagramKind::Screen => "screen",
-        DiagramKind::Er => "er",
-        DiagramKind::State => "state",
-        DiagramKind::Event => "event",
-    }
+fn kind_name(kind: &DiagramKind) -> String {
+    kind.to_possible_value()
+        .expect("no diagram kind is skipped")
+        .get_name()
+        .to_string()
 }
 
 /// The diagram's name as RDRA calls it, for its title.

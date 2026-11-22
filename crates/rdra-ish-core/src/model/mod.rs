@@ -7,7 +7,6 @@ mod keys;
 mod query;
 mod refs;
 mod symbol;
-mod typed;
 
 pub use comparison::*;
 pub use constraints::*;
@@ -18,7 +17,6 @@ pub use keys::*;
 pub use query::*;
 pub use refs::*;
 pub use symbol::*;
-pub use typed::*;
 
 use slotmap::SlotMap;
 use std::collections::HashSet;
@@ -91,10 +89,13 @@ impl SemanticModel {
     /// Values of an `Enum` or variation-typed column; `None` for scalar types.
     ///
     /// This is the single lookup every exporter uses for "what may this column hold".
-    pub fn column_values<'a>(&'a self, col: &'a ModelColumn) -> Option<&'a [std::string::String]> {
+    pub fn column_values<'a>(&'a self, col: &'a ModelColumn) -> Option<Vec<&'a str>> {
         match &col.col_type {
-            ColumnType::Enum(values) => Some(values),
-            ColumnType::Variation(key) => self.variations.get(*key).map(|v| v.values.as_slice()),
+            ColumnType::Enum(values) => Some(values.iter().map(|v| v.as_str()).collect()),
+            ColumnType::Variation(key) => self
+                .variations
+                .get(*key)
+                .map(|v| v.values.iter().map(|v| v.value.as_str()).collect()),
             _ => None,
         }
     }
@@ -111,8 +112,12 @@ impl SemanticModel {
         };
         let label = match &col.col_type {
             ColumnType::Variation(key) => self.variations.get(*key).and_then(|variation| {
-                let index = variation.values.iter().position(|v| v == value)?;
-                variation.labels.get(index)?.as_deref()
+                variation
+                    .values
+                    .iter()
+                    .find(|v| v.value == value)?
+                    .label
+                    .as_deref()
             }),
             _ => col.value_label(value),
         };
@@ -316,8 +321,6 @@ pub struct SemanticModel {
     pub field_mappings: Vec<FieldMapping>,
     /// `maps_field(Dto.field, Entity.column)`, in source order.
     pub dto_mappings: Vec<DtoMapping>,
-    /// 解析済み述語の型付き表現。
-    pub typed_predicates: Vec<TypedPredicate>,
     /// Events intentionally published outside the local model boundary.
     pub outbox_events: HashSet<EventKey>,
     /// `creates/updates/deletes(UseCase, Entity).apart()`: the use case writes a row of the
@@ -334,13 +337,13 @@ pub struct SemanticModel {
     /// `drives(origin, Entity.column op rhs, bool)` で宣言された比較命題の真偽効果
     pub proposition_effects: Vec<PropositionEffect>,
     /// `forbidden(...)` 述語で宣言された禁止状態制約
-    pub forbidden_constraints: Vec<ForbiddenConstraint>,
+    pub forbidden_constraints: Vec<EntityRule>,
     /// `invariant(...)` 述語で宣言された不変条件制約
     pub entity_invariants: Vec<EntityInvariant>,
     /// `required(...)` 述語で宣言された常時成立制約
-    pub required_constraints: Vec<RequiredConstraint>,
+    pub required_constraints: Vec<EntityRule>,
     /// `exclusive(...)` 述語で宣言された相互排他制約
-    pub exclusive_constraints: Vec<ExclusiveConstraint>,
+    pub exclusive_constraints: Vec<EntityRule>,
     /// `forbidden(...)` 述語で宣言されたクロスエンティティ禁止制約
     pub cross_forbidden_constraints: Vec<CrossForbiddenConstraint>,
     /// `invariant(...)` 述語で宣言されたクロスエンティティ不変条件

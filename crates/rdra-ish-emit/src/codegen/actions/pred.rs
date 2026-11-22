@@ -1,10 +1,104 @@
-//! Runtime expressions for modeled conditions.
+//! A transition-system predicate as a codegen expression, and the simplifier over it.
 
 use super::*;
 
+/// Where a slot reference of a predicate points: a row, and its state when it has one.
+pub(in crate::codegen) type Bind<'a, 'd> =
+    &'a dyn Fn(At) -> Option<(usize, Option<&'d VariantDecl>)>;
+
+/// The flat row type and fields of an entity, by its id.
+pub(in crate::codegen) type RowTypeOf<'a> = &'a dyn Fn(&str) -> Option<(String, Vec<Field>)>;
+
+/// What a quantifier (`.has` / `.none`) needs: the rows it binds and the lists they come from.
+pub(in crate::codegen) struct Quant<'a> {
+    pub model: &'a SemanticModel,
+    /// The flat row type and fields of an entity.
+    pub row_type: RowTypeOf<'a>,
+    /// The `Bound` index of the first quantifier's row.
+    pub base: usize,
+    /// The function's rows: a quantifier's row is numbered after them.
+    pub n_rows: usize,
+    pub elems: Vec<RowParam>,
+    /// The row each enclosing quantifier binds, outermost first.
+    pub stack: Vec<usize>,
+    /// `(input name, row type)` per list a quantifier ranges over.
+    pub lists: Vec<(String, String)>,
+}
+
 /// A predicate on the rows `bind` names. `quant` lets it range over related rows.
-///
-/// The row `at` names: a function row by `bind`, or the row of an enclosing quantifier.
+pub(in crate::codegen) fn expr(
+    ts: &TransitionSystem,
+    pred: &Pred,
+    rows: &[RowParam],
+    bind: Bind<'_, '_>,
+    quant: &mut Option<&mut Quant<'_>>,
+) -> Result<Expr, String> {
+    Ok(match pred {
+        Pred::True => Expr::True,
+        Pred::False => Expr::False,
+        Pred::Not(p) => Expr::Not(Box::new(expr(ts, p, rows, bind, quant)?)),
+        Pred::And(ps) => {
+            let mut out = Vec::new();
+            for p in ps {
+                out.push(expr(ts, p, rows, bind, quant)?);
+            }
+            Expr::And(out)
+        }
+        Pred::Or(ps) => {
+            let mut out = Vec::new();
+            for p in ps {
+                out.push(expr(ts, p, rows, bind, quant)?);
+            }
+            Expr::Or(out)
+        }
+        Pred::In(term, values) => {
+            let mut out = Vec::new();
+            for v in values {
+                out.push(atom(ts, term, TsCmp::Eq, v, rows, bind, quant)?);
+            }
+            Expr::Or(out)
+        }
+        Pred::Cmp(a, op, b) => atom(ts, a, *op, b, rows, bind, quant)?,
+        Pred::Forall { entity, body } | Pred::Exists { entity, body } => {
+            let Some(q) = quant.as_deref_mut() else {
+                return Err("a condition over related rows, `.has` or `.none` (phase 5)".into());
+            };
+            let id = ts.entity(*entity).id.clone();
+            let (ty, fields) = (q.row_type)(&id)
+                .ok_or_else(|| format!("related rows of {id}, which has no generated type"))?;
+            let list = format!("{}_rows", snake(&id));
+            let input = match q.lists.iter().position(|(n, _)| *n == list) {
+                Some(i) => i,
+                None => {
+                    q.lists.push((list, ty.clone()));
+                    q.lists.len() - 1
+                }
+            };
+            let k = q.elems.len();
+            q.elems.push(RowParam {
+                name: format!("{}_{k}", snake(&id)),
+                param: None,
+                state: None,
+                entity: id,
+                ty,
+                fields,
+                always_null: Vec::new(),
+            });
+            let elem = q.n_rows + k;
+            q.stack.push(elem);
+            let inner = expr(ts, body, rows, bind, quant);
+            if let Some(q) = quant.as_deref_mut() {
+                q.stack.pop();
+            }
+            let body = Box::new(inner?);
+            match pred {
+                Pred::Exists { .. } => Expr::Exists { input, elem, body },
+                _ => Expr::Forall { input, elem, body },
+            }
+        }
+    })
+}
+
 pub(super) fn resolve<'d>(
     at: At,
     rows: &[RowParam],
@@ -134,7 +228,7 @@ pub(super) fn atom(
                 _ => Ok(Expr::False),
             };
         };
-        if left_field.ty != FieldType::Scalar(super::ir::Scalar::Int)
+        if left_field.ty != FieldType::Scalar(crate::codegen::ir::Scalar::Int)
             || right_field.ty != left_field.ty
         {
             return Err("a comparison between columns that are not plain Int values".into());
@@ -217,7 +311,7 @@ pub(super) fn atom(
                 .iter()
                 .find(|f| f.wire == *column)
                 .ok_or_else(unsupported)?;
-            if field.ty != FieldType::Scalar(super::ir::Scalar::Int) {
+            if field.ty != FieldType::Scalar(crate::codegen::ir::Scalar::Int) {
                 return Err("a comparison on a column that is not a plain Int".into());
             }
             let value = match rhs {
@@ -252,5 +346,77 @@ fn comparison_operator(op: TsCmp) -> CmpOp {
         TsCmp::Le => CmpOp::Le,
         TsCmp::Gt => CmpOp::Gt,
         TsCmp::Ge => CmpOp::Ge,
+    }
+}
+
+/// Folds the constant parts of an expression.
+pub(in crate::codegen) fn simplify(e: Expr) -> Expr {
+    match e {
+        Expr::Exists { input, elem, body } => match simplify(*body) {
+            Expr::False => Expr::False,
+            body => Expr::Exists {
+                input,
+                elem,
+                body: Box::new(body),
+            },
+        },
+        Expr::Forall { input, elem, body } => match simplify(*body) {
+            Expr::True => Expr::True,
+            body => Expr::Forall {
+                input,
+                elem,
+                body: Box::new(body),
+            },
+        },
+        Expr::Not(inner) => match simplify(*inner) {
+            Expr::True => Expr::False,
+            Expr::False => Expr::True,
+            Expr::Not(x) => *x,
+            other => Expr::Not(Box::new(other)),
+        },
+        Expr::And(items) => {
+            let mut kept = Vec::new();
+            for item in items.into_iter().map(simplify) {
+                match item {
+                    Expr::True => {}
+                    Expr::False => return Expr::False,
+                    other => kept.push(other),
+                }
+            }
+            match kept.len() {
+                0 => Expr::True,
+                1 => kept.pop().expect("one item"),
+                _ => Expr::And(kept),
+            }
+        }
+        Expr::Or(items) => {
+            let mut kept = Vec::new();
+            for item in items.into_iter().map(simplify) {
+                match item {
+                    Expr::False => {}
+                    Expr::True => return Expr::True,
+                    other => kept.push(other),
+                }
+            }
+            match kept.len() {
+                0 => Expr::False,
+                1 => kept.pop().expect("one item"),
+                _ => Expr::Or(kept),
+            }
+        }
+        other => other,
+    }
+}
+
+/// Points each quantifier at the input its list became.
+pub(super) fn remap_lists(e: &mut Expr, to: &[usize]) {
+    match e {
+        Expr::Not(x) => remap_lists(x, to),
+        Expr::And(xs) | Expr::Or(xs) => xs.iter_mut().for_each(|x| remap_lists(x, to)),
+        Expr::Exists { input, body, .. } | Expr::Forall { input, body, .. } => {
+            *input = to[*input];
+            remap_lists(body, to);
+        }
+        _ => {}
     }
 }

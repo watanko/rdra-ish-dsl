@@ -10,8 +10,6 @@ use crate::lifecycle::types::{At, CmpOp, Domain, Pred, Site, Term, Value};
 use crate::model::{CmpOpModel, CmpRhs, ComparisonProp, DerivedExpr, EffectValue, EntityKey};
 
 impl<'m> Builder<'m> {
-    // ── Atoms ────────────────────────────────────────────────────────────────
-
     pub(super) fn slot(&self, ek: EntityKey, column: &str, at: At) -> Option<(Term, Domain)> {
         let e = self.ent_of[&ek];
         let var = *self.col_var.get(&(e, column.to_string()))?;
@@ -68,13 +66,13 @@ impl<'m> Builder<'m> {
         }
         let Some((term, domain)) = self.read_slot(ek, column, at, site) else {
             // Not a state var: a non-null column is always present and never null.
-            return match value.normalize() {
+            return match value {
                 EffectValue::Present => Pred::True,
                 _ => Pred::False,
             };
         };
         let lit = |v: Value| Pred::Cmp(term.clone(), CmpOp::Eq, Term::Lit(v));
-        match (&domain, value.normalize()) {
+        match (&domain, value) {
             (Domain::Enum(values), EffectValue::EnumVariant(s)) => {
                 crate::lifecycle::build::variant_index(values, s)
                     .map_or(Pred::False, |i| lit(Value(i)))

@@ -136,7 +136,7 @@ stays as it was.
 | RDRA | TLA+ |
 |---|---|
 | Entity | `<E>_Ids == 1..InstanceCount` and `<E>_exists`, a function over the ids with values `"absent"`, `"present"`, `"deleted"` |
-| Enum, Bool, `@null`, Int, Money, Decimal, Date, or DateTime column the system reads or writes; a variation-typed column that something names | `<E>_<col>`, a function over `<E>_Ids`. Int-like columns range over `IntRange` (nullable ones add `"null"`). |
+| Enum, Bool, `@null`, Int, Money, Decimal, Date, or DateTime column the system reads or writes; a variation-typed column that something names | `<E>_<col>`, a function over `<E>_Ids`. Int-like columns range over `IntRange` (nullable ones add `-1` for null). |
 | `relate` N:1, 1:N, 1:1 | `<Child>_owner_<Parent>`, a function from child ids to parent ids. An `.optional()` relate adds `0` for an unlinked child. |
 | Use case | One operator `<UC>(p0, ...)` per transaction group of `UsecaseTx::groups()` (`<UC>_1`, `<UC>_2`, ... when the writes form several groups). `Next` is the disjunction of `\E` over the parameters. |
 | A use case split into k groups | A run mark `<E>_run_<UC>`, a function from the ids of each entity a step before the last writes to `{"none", "1", .., "k-1"}`. `<UC>_1` takes a row at `"none"` and sets `"1"`; `<UC>_i` binds a parameter per earlier row with `<E>_run_<UC>[p] = "i-1"` in place of a presence test, and sets `"i"`, or `"none"` at the last step (see [Runs of a split use case](./state-derivation.md#runs)). |
@@ -153,7 +153,7 @@ stays as it was.
 | `col < now` | A global `now \in IntRange` and a `Tick` action that adds one while `now < max`. |
 | Entity-local and multi-entity `forbidden`, `invariant`, `required`, `exclusive` | One `INVARIANT` each, named `<Kind>_<Entity>_<n>` (`Forbidden_Order_0`, `Inv_Order_0`, `MultiForbidden_Order_0`). Each ranges over the present instances. |
 | `.along(...)` | Quantified over `<E>_Ids`, joined by `<Child>_owner_<Parent>` equalities. |
-| `col: T @check(expr)` | `INVARIANT Check_<Entity>_<column>_<n>` over the present instances. A nullable operand is guarded: `qty: Int @null @check(qty >= 1)` prints `(E_qty[b0] = -1) \/ (E_qty[b0] # -1 /\ E_qty[b0] >= 1)`. |
+| `col: T @check(expr)` | `INVARIANT Check_<Entity>_<column>_<n>` over the present instances. A nullable operand is guarded: `qty: Int @null @check(qty >= 1)` prints `(E_qty[b0] # -1 /\ E_qty[b0] >= 1)`, so a null `qty` violates it. |
 | `relate(Child, Parent, 1:1)` | `INVARIANT Unique_<Child>_<role>` (role defaults to the parent id): `\A b0, b1 \in <Child>_Ids`, two present children are the same or have different owners. An unlinked optional child owns nothing. |
 | `relate(Child, Parent, 1..*:1)` (child-side minimum) | `INVARIANT MinCard_<Child>_<role>`: `\A b0 \in <Parent>_Ids`, a present parent has `\E b1 \in <Child>_Ids` present with `<Child>_owner_<Parent>[b1] = b0`. Checked in every state, so a parent created without a child in the same transaction, or a deleted last child, is a counterexample. |
 | Pre-existing child of a `relate` | `Init` links the owner: `\in [<Child>_Ids -> <Parent>_Ids]` for N:1 (start `Any`), `[i \in <Child>_Ids \|-> i]` for 1:1 and for a child-side minimum (start `Identity`). An `.optional()` key under a created parent starts unlinked (`Base`). |
@@ -186,8 +186,7 @@ after(Sell).assert(Item.sold >= 1)
 invariant(Cert).when(status == revoked).none(Assign.status == active)
 // equivalent: invariant(Cert, Assign).when(Cert.status == revoked).none(Assign.status == active)
 
-forbidden(Order, Payment, Order.status == cancelled, Payment.status == captured)
-  .along(Order, Payment)
+forbidden(Order, Payment, Order.status == cancelled, Payment.status == captured).along(Order, Payment)
 ```
 
 Operators:
@@ -223,6 +222,16 @@ cone does not decide it (see [Temporal properties on a cone](#temporal-propertie
 TLC reports a temporal violation as `Temporal properties were violated.` without naming the
 property, so each property runs alone: module `Cone_<Property>` with a `.cfg` that names
 that one `PROPERTY`. The property cones run with the other cones, in parallel.
+
+Up to 8 cone runs go at once, the property cones and the cones with the most variables
+first, since those tend to be the long ones. Each run gets the cores divided by the runs
+at once, and no fewer than 2 TLC workers on 4 cores or more: once the short cones are
+done, a long cone on one worker would leave the other cores idle. With several workers
+TLC reaches the same states, so an `ok` is the `ok` of one worker, but it no longer finds
+a violation by the shortest trace. A safety cone that does not pass is therefore run
+again on one worker, and `verify` reports only that run, so a counterexample is the one a
+single worker finds. A temporal property's lasso differs from run to run on one worker
+too.
 
 A property with `.fair(UC, ...)` (see
 [language-reference.md](./language-reference.md#fairness-fairusecase-)) carries its
@@ -309,8 +318,8 @@ the reduced cone, before the `_WF` note. A property without `.fair` rests on
 `WF_vars(Next)` alone, so it reaches the whole model unless its cone holds every written
 var; name the use cases it relies on to keep it on the cone. On food-permit-ops
 `HygieneManagerEventuallyAppointed` runs on a 243-state cone and the whole `verify` takes
-18 s; on patent-ops `GrantEnds` runs on a 4,105-state cone; on insurance-claim-ops
-`ClaimEventuallyDecided` runs on a 2,975-state cone and `SubrogationEnds` on a 4,783-state one. The test
+18 s; on patent-ops `GrantEnds` runs on a 75,017-state cone; on insurance-claim-ops
+`ClaimEventuallyDecided` runs on a 633,787-state cone and `SubrogationEnds` on a 372-state one. The test
 `a_property_cone_decides_what_the_whole_model_decides` in `engine_equivalence` compares the
 cone verdict with the whole-model verdict on the temporal samples and on fixtures for each
 case: another entity looping outside the cone, a fair use case whose guard reads another
@@ -320,7 +329,7 @@ cone leaves out, a `.none` guard on a fair use case whose quantified column anot
 case writes, and a condition on a creating use case that reads a column the creation does
 not assign.
 
-Before TLC runs, `verify` explores each entity's cone with BFS at the same bounds, capped at
+While TLC runs, `verify` explores each entity's cone with BFS at the same bounds, capped at
 8,388,608 states per cone (`Caps::VERIFY`, named in the `bounds:` line). Each state of a
 state model must have a witness there (see
 [state-derivation.md](./state-derivation.md#state-models-and-witnesses)). A `NoWitness`
@@ -574,7 +583,7 @@ $ rdra-ish verify samples/formal-verification/partial_scope.rdra --entity Order
 bounds: 2 instances per entity, Int 0..5 (TLA+ InstanceCount=2, IntRange=0..5); 8388608 states per BFS cone; entities a check does not read are unbounded
 scope: --entity Order
 cones: 1 for 1 invariant(s) and 0 after-assert(s)
-temporal properties: none, no whole-model run
+temporal properties: none
 not checked: 1 entity view (Audit), 1 invariant (Forbidden_Audit_1), 0 after-asserts; 1 build error deferred; 1 finding not decided
   deferred error[DerivedColumnRead_Audit_score]: Audit: Audit.score is derived by arithmetic, which the lifecycle cannot evaluate; compare the columns it reads instead
   whether Record can run is not decided: no cone of a selected entity keeps it
@@ -621,8 +630,10 @@ rules and lemmas that is inductive together (the Houdini algorithm):
   deleted, and a present row's key never names an absent row.
 - What BFS shows on each entity cone and each rule's cone at the run's bounds: the
   patterns a present row takes, the values of each column and of each pair of columns,
-  the patterns a child row takes with the parent its key names (whole, and per parent
-  column), and the pairs of patterns two children of one parent take.
+  the patterns a child row takes with the parent its key names (whole, per parent column,
+  and one column of each), and the pairs of patterns two children of one parent take. The
+  pairs of one column of each are many on a model with many columns, so they join only
+  when a rule stays unproved without them, and the proof runs once more.
 
 A lemma is only a guess until it survives the same checks, so a capped exploration costs
 proofs, not soundness. The lemmas a proof kept print as `lemma:` lines.
@@ -634,14 +645,27 @@ When no mined lemma rules a CTI's state out, write the missing fact as a rule wi
 invariant(Order).when(status == placed).none(Shipment).label("a placed order has no shipment yet").lemma()
 ```
 
-A rule marked `.lemma()` is an ordinary rule to every engine: `check` and `verify` check it,
-so a wrong lemma fails with a trace before it can help a proof. In the proof it is one more
-candidate. It prints as `proved: lemma <name>` or `unproved: lemma <name>`, and the
+A rule marked `.lemma()` is checked by `check` like any rule, so a wrong lemma fails there
+with a trace. `verify` runs no TLC cone for a lemma: the proof keeps a lemma only when it
+proves it, so a wrong one never helps a proof, and a lemma that reads two large cones would
+join them into one far larger cone. In the proof a lemma is one more candidate. It prints as `proved: lemma <name>` or `unproved: lemma <name>`, and the
 `proof: your lemmas: ...` line counts it apart from the rules, so it never counts toward the
-`n of m rules` of the `OK:` line. A lemma reads only what a rule reads: a CTI that turns on a
-split use case's run mark (`_run_<UseCase>`) or an event mark (`_raised_<Event>`) needs a
-fact the DSL cannot state. The one rule of the domain samples that stays unproved,
-insurance-claim-ops' 「賠償の請求は示談書がそろってから完了する」, is such a case.
+`n of m rules` of the `OK:` line.
+
+A lemma reads only what a rule reads, so it cannot name a split use case's run mark
+(`_run_<UseCase>`) or an event mark (`_raised_<Event>`). A CTI that turns on a mark usually
+has a fact about columns behind it, one step earlier. Find it by following the CTIs back.
+insurance-claim-ops' 「賠償の請求は示談書がそろってから完了する」 is an example. Its CTI is a
+case between OpenSettlement's two steps (`_run_OpenSettlement=1`) with a completed claim. A
+lemma about cases in `investigating` breaks one step earlier, at RequestInvestigation, from
+`responded`. Generalizing over every status before negotiation gives the lemma below. With it,
+the mined lemmas that pair one column of a claim with one column of its case become
+inductive, and together they rule the CTI out, so the rule is proved. Neither the lemma nor
+those mined pairs prove it alone:
+
+```rdra
+forbidden(Claim, ClaimCase, Claim.completed_on == present, ClaimCase.status in (received, responded, investigating), ClaimCase.coverage in (bodily_liability, property_liability)).along(Claim, ClaimCase).label("賠償責任の事故は示談交渉の前に請求を完了しない").lemma()
+```
 
 ```
 proof (Z3 version 4.8.12 - 64 bit): 2 state rules, for any number of rows and any Int value
@@ -670,7 +694,9 @@ unproved: Unique_Shipment_Order: not inductive; Ship(Order#1, Shipment#1) breaks
 
 Here the CTI is also a real run: `one_to_one_shared` links two Shipments to one Order, and
 `verify` at two instances reports the violation with its trace. A rule z3 gives up on
-(each check of a rule has 10 s, of a lemma 0.5 s) is `unproved` with `z3 gave up on <action>`. A rule that fails in an
+(each check of a rule has 10 s, of a lemma 0.5 s) is `unproved` with `z3 gave up on <action>`. The checks of one
+step are shared out over several z3 processes (`RDRA_JOBS`); the proof and its CTIs do not
+depend on how many. A rule that fails in an
 initial state is `unproved` too; the bounded engines report that violation.
 
 Some rules have no `CHECK` in the schema `export --kind sql` writes: a rule over several
@@ -683,7 +709,7 @@ an obligation the use cases already discharge, for any number of rows.
 
 `--prove` reads the state rules only. After-asserts and temporal properties are not tried.
 The result does not change the exit status unless `--deny-unproved` is given. Every rule of
-the domain samples proves except the insurance-claim-ops rule named above.
+the domain samples proves, insurance-claim-ops' with the lemma above.
 `tests/proof_equivalence.rs` checks on every sample that no rule it proves has a BFS
 counterexample at one, two, or three instances.
 
@@ -753,7 +779,7 @@ counterexample at one, two, or three instances.
   of 300,000 states is compared at 1 instance only. The test decides this on the run
   `verify` uses: the reduced cone where the cone reduces, the cone itself where it does not.
   It lists these cones in `VERIFY_FALLBACK` and fails when the list changes, so a cone that
-  grows past the cap fails it until it is listed. Today 10 cones in `samples/clinic-ops`,
+  grows past the cap fails it until it is listed. Today 11 cones in `samples/clinic-ops`,
   `samples/patent-ops`, `samples/food-permit-ops` and `samples/insurance-claim-ops` are
   listed. The table gives each listed cone and each cone the cap of 300,000 took off the
   list, at 2 instances, measured with
@@ -1106,8 +1132,8 @@ Name         = [A-Za-z0-9_]+
 
 The script prints one line per run with the verdict, the wall time, and the maximum RSS
 (GNU `time` on Linux, BSD `/usr/bin/time` on macOS), then the count of roots and runs.
-Locally (Apple silicon) the 63 runs of the 31 roots take about 220 s: clinic-ops `verify`
-takes 105 s at about 2.0 GB (50 s at 1.4 GB before the run marks of `CheckInPatient`, #80)
-and patent-ops `verify` 68 s at about 1.2 GB, their TLC JVMs included; food-permit-ops
-`verify` takes 16 s, and insurance-claim-ops `verify` about 3 s at about 470 MB. The CI
-step has 5 minutes.
+The script makes 65 runs of the 32 roots. Locally (Apple silicon) clinic-ops `verify` took
+105 s at about 2.0 GB (50 s at 1.4 GB before the run marks of `CheckInPatient`, #80) and
+patent-ops `verify` 68 s at about 1.2 GB, their TLC JVMs included, and food-permit-ops
+`verify` 16 s, when last measured there. insurance-claim-ops `verify` takes about 180 s at
+about 2.1 GB, as the gaps above say. The CI step has 20 minutes.

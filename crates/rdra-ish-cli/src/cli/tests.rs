@@ -23,7 +23,7 @@ fn parses_changed_subcommands_and_options() {
     .unwrap();
 
     match cli.command {
-        Commands::Diagram {
+        Commands::Diagram(DiagramArgs {
             inputs,
             kind,
             format,
@@ -34,7 +34,7 @@ fn parses_changed_subcommands_and_options() {
             edge_kind,
             out,
             ..
-        } => {
+        }) => {
             assert_eq!(inputs, vec![PathBuf::from("sample.rdra")]);
             assert!(usecase.is_empty());
             assert!(entity.is_empty());

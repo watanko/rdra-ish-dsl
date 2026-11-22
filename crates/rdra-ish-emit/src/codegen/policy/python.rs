@@ -30,22 +30,21 @@ pub(in crate::codegen) fn print_python(model: &SemanticModel, options: &Options)
         let values = variation
             .values
             .iter()
-            .map(|value| string_literal(value))
+            .map(|value| string_literal(&value.value))
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
             "{name}Value = Literal[{values}]\n{name}: tuple[{name}Value, ...] = ({values},)\n"
         ));
-        if variation.labels.iter().any(Option::is_some) {
+        if variation.values.iter().any(|value| value.label.is_some()) {
             let labels = variation
                 .values
                 .iter()
-                .zip(&variation.labels)
-                .map(|(value, label)| {
+                .map(|value| {
                     format!(
                         "{}: {}",
-                        string_literal(value),
-                        string_literal(label.as_ref().unwrap_or(value))
+                        string_literal(&value.value),
+                        string_literal(value.label.as_ref().unwrap_or(&value.value))
                     )
                 })
                 .collect::<Vec<_>>()

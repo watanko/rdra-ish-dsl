@@ -150,7 +150,12 @@ fn build(model: &SemanticModel, options: &Options) -> Policy {
                 }
                 .into(),
                 nullable: column.is_nullable,
-                values: model.column_values(column).unwrap_or_default().to_vec(),
+                values: model
+                    .column_values(column)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
                 unsupported_derivation: match &column.derived_expr {
                     Some(value @ DerivedExpr::Arith(_)) => Some(value.display()),
                     _ => None,
@@ -273,7 +278,11 @@ fn build(model: &SemanticModel, options: &Options) -> Policy {
         .values()
         .map(|variation| Variation {
             name: variation.id.clone(),
-            values: variation.values.clone(),
+            values: variation
+                .values
+                .iter()
+                .map(|value| value.value.clone())
+                .collect(),
         })
         .collect();
     let foreign_keys = model
@@ -390,7 +399,7 @@ fn literal(value: &EffectValue) -> Operand {
             operand.integer = Some(*value);
         }
         EffectValue::Null => operand.kind = "null".into(),
-        EffectValue::Present | EffectValue::TypedPresent(_) => operand.kind = "present".into(),
+        EffectValue::Present => operand.kind = "present".into(),
     }
     operand
 }

@@ -10,17 +10,28 @@
   explicit mutable/slotted dataclasses, Literal value sets, and opt-in Pydantic records
   through `--python-config`. Record names and option keys are validated.
 
+- insurance-claim-ops states 「賠償責任の事故は示談交渉の前に請求を完了しない」 as a
+  `.lemma()`, so `verify --prove` proves every state rule of every domain sample. The docs
+  and the `rdra-ish-verify` skill show how to find a lemma behind a CTI that turns on a
+  run mark (#147).
+- `verify --prove` also mines lemmas that pair one column of a child row with one column of
+  the parent its key names. The insurance lemma closes its rule only together with them.
+  They join only when a rule stays unproved without them, so a model that needs none takes
+  no longer (#147).
+- `verify` runs no TLC cone for a `.lemma()` rule. The proof uses a lemma only once it
+  proves it, and the insurance lemma, which reads both the claim's and the case's columns,
+  joined their two large cones into one that TLC did not finish in 10 minutes. `check` still
+  checks lemmas (#147).
 - `verify --prove` marks each rule the SQL export's schema does not enforce (the rules under
   `Not enforced by this schema`) with `[not enforced by the SQL schema: <why>]`, and counts
   how many of them the use cases are proved to keep (#141).
-
 - `verify --prove` also proves for any Int value and any time: Int columns and `now` have no
   top in the proof, `Tick` always runs, and a write of any value takes any number. A rule
   that held only because numbers stop at `--int-range-max` is now unproved, with a CTI
   that shows the larger value (#141).
-
 - `.lemma()` on a `forbidden` or an `invariant` marks a fact written to help
-  `verify --prove`. Every engine checks it as a rule; the proof reports it as
+  `verify --prove`. `check` checks it as a rule, and `verify` runs no TLC cone for it
+  (the proof uses a lemma only once it proves it); the proof reports it as
   `proved: lemma <name>` and counts it apart from the rules (#141). The `rdra-ish-verify`
   skill gains `references/prove.md`: reading a counterexample to induction and proposing a
   lemma.
@@ -31,7 +42,6 @@
   the states BFS reaches and kept only when they are inductive too; the ones a proof used
   print as `lemma:` lines. `--deny-unproved` fails the run on an unproved rule, and `--z3` or
   `RDRA_Z3` names the binary (#141).
-
 - An entity takes a `rows` estimate (`rows 5000`, `rows "1e6"`); a value that is not a
   whole number is `InvalidRowEstimate`. `lint` `query-index-missing` skips an entity under
   10,000 rows, and the SQL export marks its suggested index as a small table.
@@ -52,6 +62,17 @@
 
 ### Changed
 
+- `verify` is faster and prints what it printed: 43 s to 20 s on clinic-ops, 53 s to 30 s on
+  patent-ops, 101 s to 27 s on food-permit-ops, and 355 s to 194 s on insurance-claim-ops
+  (4 cores). BFS computes the moves of one large cone on several threads and reaches the
+  states in the order one thread does. The TLC cone runs start while BFS and the proof run,
+  the long ones first, each with at least 2 TLC workers on 4 cores or more; a safety cone
+  that does not pass runs again on one worker, so a counterexample is the one a single
+  worker finds. `verify --prove` shares the checks of a step over several z3 processes.
+  `RDRA_JOBS` also sets the BFS threads of one cone and the number of z3 processes. The peak
+  memory is now BFS plus the TLC heaps. A counterexample to induction may show another value
+  for a column its step does not constrain: the solver that reads it starts over first, so
+  the CTI does not depend on the number of z3 processes (#163).
 - Skill `rdra-ish-diagram` says how to lay out a PRD and a design document from the model
   (`references/documents.md`): which diagrams and tables go into each section, in which
   order, and the rules for embedding them (generate, stay under Mermaid's limits, tables as
@@ -61,6 +82,55 @@
   the diagrams are made for a PRD or a design document and links the guide.
 - The sample design documents open each BUC section's processing with the BUC's sequence
   diagram (`diagram --kind sequence --buc`), before the per-use-case ones.
+- A predicate whose arguments have the wrong kinds adds no relation. `invokes(UseCase,
+  Entity)` reports its type mismatch and stops, as a wrong `contains` or `triggers` pair
+  already did, so the diagnostics that followed from the bad edge, and the edge in
+  diagrams and in the LSP, are gone (#159).
+- A `property` atom whose column no single entity owns is the model error
+  `UnresolvedPropertyColumn`, which `check` and the LSP report while building the model.
+  It was the lifecycle's `UnresolvedPropertyAtom`, and until then the atom's bare
+  right-hand side was read by its spelling. The lifecycle diagnostic is gone (#160).
+- `rdra-ish-core` keeps the conditions of a single-entity rule in one list of
+  `EntityCondition` (`Equals { column, value }` or `Comparison`), in the order written, as
+  cross-entity rules keep `CrossEntityCondition`. `forbidden_constraints`,
+  `required_constraints` and `exclusive_constraints` hold `EntityRule`, which replaces
+  `ForbiddenConstraint`, `RequiredConstraint` and `ExclusiveConstraint`; its `equals()`
+  and `comparisons()` read one kind. `EntityInvariant` has `guards` and `requireds` only.
+  `EffectValue::TypedPresent`, `EffectValue::normalize()` and the always-empty `pg_type`
+  of `AxisKind::Nullable` and `StateFieldValue::Present` are gone, and
+  `AbstractValue::display_with_type(None)` is `display()`. Output is unchanged (#162).
+
+### Fixed
+
+- `check`, `lint` and the LSP print the warnings for an API or an entity in several
+  systems, an entity owned by several systems or without an API of its owner, and a
+  permission no actor can reach in id order. They came in the order of a hash map, which
+  could change from one run to the next (#152).
+- The ER diagram lists its relations by the ids of the two entities they join. They were
+  sorted by the debug text of internal keys, so the tenth entity of a model came before
+  the second (#153).
+- A second definition of the same kind and id in one module no longer leaves a node with
+  no symbol and no declaration site in the model. Diagrams, lists and exports of a model
+  that `check` rejects for the duplicate show the node once (#154).
+- A key column copied from an enum key column keeps the labels of its values, so SQL
+  comments, DBML notes and the other outputs that print labels show them on the copy too
+  (#155).
+- `diagram --all` fails on an error from an emitter and names the diagram. It counted
+  every error as a diagram with nothing to draw and left it out. A sequence diagram of a
+  BUC with no use case is still left out, and its error no longer opens with `IO error:`
+  (#156).
+- The language server analyzes the workspace off its message loop and publishes a result
+  only while it is the latest. A slower analysis of older text could otherwise publish
+  over a newer one, and every analysis held up the requests behind it: in the new test, 38
+  quick edits to a large file settled in about 3 seconds, where they took about a minute
+  before (#157).
+- A BUC whose id another kind also uses (`buc Order` with `entity Order`) reaches its use
+  cases again. It reached nothing, so `lint` drew false findings on it and `--buc`
+  diagrams of it came out empty (#158).
+- A use case that a step of a BUC's flow covers is one of the BUC's use cases for
+  permissions, actor inputs and the `TriggeredUseCaseUnreachable` warning too, as it
+  already was for `next` and the BUC hand-offs. `performs(Actor, Buc)` now lends the actor
+  to it, so its required permissions find the actor (#161).
 
 ## v2.3.0 - 2026-11-18
 
