@@ -244,6 +244,9 @@ impl<'m> Script<'m> {
             ColumnType::DateTime if pg => "TIMESTAMPTZ".to_string(),
             ColumnType::Date if pg => "DATE".to_string(),
             ColumnType::DateTime | ColumnType::Date => "TEXT".to_string(),
+            ColumnType::Record(_) | ColumnType::List(_) | ColumnType::Tuple(_) => {
+                if pg { "JSONB" } else { "TEXT" }.to_string()
+            }
             ColumnType::Bool => "BOOLEAN".to_string(),
             ColumnType::Enum(_) if pg => ident(&enum_type_name(entity, column)),
             ColumnType::Variation(key) if pg => self
@@ -436,7 +439,7 @@ impl<'m> Script<'m> {
         let mut sets: Vec<Vec<String>> = entity
             .columns
             .iter()
-            .filter(|c| c.is_unique && !(entity.primary_key == [c.name.clone()]))
+            .filter(|c| c.is_unique && (entity.primary_key != [c.name.clone()]))
             .map(|c| vec![c.name.clone()])
             .collect();
         for unique in self.model.unique_keys(key) {
@@ -954,167 +957,8 @@ fn operand(operand: &ArithOperand) -> String {
     }
 }
 
-fn local_text(equalities: &[(String, EffectValue)], comparisons: &[ComparisonProp]) -> String {
-    equalities
-        .iter()
-        .map(|(c, v)| format!("{c} == {}", v.literal()))
-        .chain(comparisons.iter().map(ComparisonProp::display))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn inv_text(inv: &Invariant) -> String {
-    use rdra_ish_core::lifecycle::InvText;
-    match &inv.text {
-        InvText::Conditions(c) => c.clone(),
-        InvText::WhenThen { guards, requireds } => format!("when {guards} then {requireds}"),
-        InvText::Cross {
-            entities,
-            conditions,
-        } => format!("{entities}: {conditions}"),
-        InvText::CrossWhenThen {
-            entities,
-            guards,
-            requireds,
-        } => format!("{entities}: when {guards} then {requireds}"),
-        InvText::Quantifier {
-            anchor, constraint, ..
-        } => format!("{anchor}: {constraint}"),
-        InvText::Unique {
-            child,
-            parent,
-            role,
-        }
-        | InvText::MinCard {
-            child,
-            parent,
-            role,
-        } => format!("{child} -> {parent} ({role})"),
-    }
-}
-
-fn fk_child_columns(fk: &ForeignKey) -> Vec<String> {
-    fk.columns.iter().map(|(c, _)| c.clone()).collect()
-}
-
-fn join_notes(note: Option<String>, more: String) -> String {
-    match note {
-        Some(n) => format!("{n}; {more}"),
-        None => more,
-    }
-}
-
-fn with_note(def: String, column: &ModelColumn) -> String {
-    let mut notes = Vec::new();
-    if let Some(label) = &column.label {
-        notes.push(label.clone());
-    }
-    if column.is_soft_delete {
-        notes.push("soft delete marker".to_string());
-    }
-    if column.is_history {
-        notes.push("history/versioning marker".to_string());
-    }
-    if column.is_tenant_scope {
-        notes.push("tenant scope discriminator".to_string());
-    }
-    if let Some(expr) = &column.derived_expr {
-        notes.push(format!("derived: {}", expr.display()));
-    }
-    if notes.is_empty() {
-        def
-    } else {
-        format!("{def} /* {} */", notes.join("; ").replace("*/", "* /"))
-    }
-}
-
-fn table_note(entity: &Entity) -> String {
-    let mut note = entity.label.clone();
-    if let Some(description) = &entity.description {
-        if !description.trim().is_empty() {
-            note.push_str(": ");
-            note.push_str(description.trim());
-        }
-    }
-    note.replace('\n', " ")
-}
-
-/// One line: a label or description may hold a line break, which would end a `--` comment.
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// `-- PaymentMethod (支払方法): cash = 現金, card`: a variation's label and its values'.
-fn variation_note(variation: &rdra_ish_core::model::Variation) -> String {
-    let values: Vec<String> = variation
-        .values
-        .iter()
-        .zip(&variation.labels)
-        .map(|(value, label)| match label {
-            Some(label) => format!("{value} = {}", one_line(label)),
-            None => value.clone(),
-        })
-        .collect();
-    format!(
-        "-- {} ({}): {}",
-        variation.id,
-        one_line(&variation.label),
-        values.join(", ")
-    )
-}
-
-fn create_enum(name: &str, values: &[String]) -> String {
-    format!(
-        "CREATE TYPE {} AS ENUM ({});",
-        ident(name),
-        values
-            .iter()
-            .map(|v| string(v))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-fn enum_type_name(entity: &Entity, column: &ModelColumn) -> String {
-    format!("{}_{}", entity.id, column.name)
-}
-
-fn ref_action(action: RefAction) -> String {
-    action.as_str().replace('_', " ").to_ascii_uppercase()
-}
-
-/// The condition a row not soft-deleted meets: the marker is null, or `FALSE` for a `Bool`.
-fn live_condition(marker: &ModelColumn) -> Option<String> {
-    let col = ident(&marker.name);
-    match marker.col_type {
-        ColumnType::Bool => Some(format!("{col} = FALSE")),
-        _ if marker.is_nullable => Some(format!("{col} IS NULL")),
-        _ => None,
-    }
-}
-
-fn same_set(a: &[String], b: &[String]) -> bool {
-    let a: BTreeSet<&String> = a.iter().collect();
-    let b: BTreeSet<&String> = b.iter().collect();
-    a == b
-}
-
-fn ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-fn idents(names: &[String]) -> String {
-    names
-        .iter()
-        .map(|n| ident(n))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
+mod format;
+use format::*;
 mod reads;
 
 #[cfg(test)]

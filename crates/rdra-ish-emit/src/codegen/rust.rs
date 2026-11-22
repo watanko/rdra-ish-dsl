@@ -196,8 +196,9 @@ pub(super) fn print(domain: &DomainModel, options: &Options) -> String {
 fn field_type(ty: &FieldType) -> String {
     match ty {
         FieldType::Scalar(s) => scalar(*s).to_string(),
-        FieldType::Enum(name) | FieldType::Id(name) => name.clone(),
+        FieldType::Enum(name) | FieldType::Id(name) | FieldType::Record(name) => name.clone(),
         FieldType::Rows(name) => format!("&[{name}]"),
+        FieldType::List(item) | FieldType::Tuple(item) => format!("Vec<{}>", field_type(item)),
     }
 }
 

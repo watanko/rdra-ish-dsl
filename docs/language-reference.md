@@ -1183,6 +1183,8 @@ entity AuditLog "Audit log"
 | `Decimal` | Decimal number. `Decimal(p, s)` stores `p` digits, `s` of them after the point. |
 | `Enum(a, b, c)` | Inline value set. An Enum column is a **state axis** and can be linked to a state machine. Use it for a lifecycle column or a value that use cases set. Each value may carry a label, as a variation value does: `Enum(pending "受付前", paid "支払済")`. Diagrams draw a state by its label, and the `states` table lists the labels under its axes. `lint` `enum-attribute` warns on an inline Enum that no `transitions` and no `sets` moves, because an actor chooses its value: type it by a variation. |
 | `<VariationId>` | A [variation](#variations) in type position, such as `method: PaymentMethod`. The column holds one of the variation's values. It is an **attribute**: not a state axis, never a lifecycle column. An id that names no variation is `UnknownColumnType`. |
+| `<DtoId>` | Embedded DTO value, allowed in DTO fields only. References resolve through the same imports as variations, including forward declarations. |
+| `List(T)` / `Tuple(T)` | Ordered collection in a DTO field. `T` is a scalar, variation, or DTO. Python preserves list versus tuple; OpenAPI and JSON Schema export arrays with typed items. |
 
 A type's arguments say what the schema stores: `export --kind sql`, `dbml`, and `json-schema`
 print them (`VARCHAR(255)`, `NUMERIC(10, 2)`, `TIMESTAMP`, `maxLength`). `check`, `states`,
@@ -1190,6 +1192,15 @@ and `verify` do not read them: an `Int` or `Decimal` column compared in a rule r
 `0..--int-range-max` whatever its precision. Another type with arguments, a length or a
 precision that is not a positive number, a scale above the precision, or a `DateTime`
 argument other than `tz` and `local` is `InvalidTypeArgs`.
+
+DTO collections may use `@default(empty)`, which creates a distinct list or an empty
+tuple per constructor. A nullable field may use `@default(null)`; this is distinct
+from a quoted text default `@default("null")`. Embedded objects are contract values,
+not foreign keys: entity columns continue to use `relate` for persistent structure.
+
+Variation wire values that cannot be written as identifiers may be quoted, for example
+`variation Model "Model" { "model-3.1" "model-3.8" }`. Identifier values still use bare
+syntax (`cash`, not `"cash"`), preserving the existing quoted-value diagnostics.
 
 #### Column annotations
 

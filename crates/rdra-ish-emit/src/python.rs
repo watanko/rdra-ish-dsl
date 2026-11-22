@@ -192,6 +192,9 @@ fn py_type_for_field(
 
 fn py_column_type(model: &SemanticModel, col_type: &ColumnType) -> String {
     match col_type {
+        ColumnType::Record(key) => model.dtos[*key].id.clone(),
+        ColumnType::List(item) => format!("list[{}]", py_column_type(model, item)),
+        ColumnType::Tuple(item) => format!("tuple[{}, ...]", py_column_type(model, item)),
         ColumnType::Int => "int".to_string(),
         ColumnType::Money | ColumnType::Decimal => "float".to_string(),
         ColumnType::String => "str".to_string(),
@@ -317,8 +320,15 @@ forbidden(Item, stock > 4)
         let collections = collect_entity_state_variants(&model, &[], Caps::STATES);
         let out = emit_python_state_unions(&model, &collections);
         assert!(out.contains("stock: int"), "{out}");
-        assert!(!out.contains("stock: 1") && !out.contains("stock: 3"), "{out}");
-        assert_eq!(out.matches("status: _t.Literal[\"active\"]").count(), 1, "{out}");
+        assert!(
+            !out.contains("stock: 1") && !out.contains("stock: 3"),
+            "{out}"
+        );
+        assert_eq!(
+            out.matches("status: _t.Literal[\"active\"]").count(),
+            1,
+            "{out}"
+        );
     }
 
     #[test]
@@ -329,9 +339,6 @@ forbidden(Item, stock > 4)
             .emit(&model, &view, &Explored::default())
             .unwrap();
         let collections = collect_entity_state_variants(&model, &[], Caps::STATES);
-        assert_eq!(
-            from_emitter,
-            emit_python_state_unions(&model, &collections)
-        );
+        assert_eq!(from_emitter, emit_python_state_unions(&model, &collections));
     }
 }

@@ -23,8 +23,8 @@ use rdra_ish_core::model::{ColumnType, Entity, EntityKey, Max, Min, ModelColumn,
 use rdra_ish_core::SemanticModel;
 
 use ir::{
-    DomainModel, EnumDecl, EnumValue, Field, FieldType, IdDecl, Obligation, RecordDecl, RecordKind,
-    Scalar, SumDecl, VariantDecl,
+    DomainModel, EnumDecl, EnumValue, Field, FieldDefault, FieldType, IdDecl, Obligation,
+    RecordDecl, RecordKind, Scalar, SumDecl, VariantDecl,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +46,23 @@ pub struct Options {
     pub version: String,
     /// What `check` said of the model: the state sums refine only a model it passed.
     pub check: CheckStatus,
+    /// Python representation options; domain values remain in the model.
+    pub python: PythonOptions,
+}
+
+/// Opt-in Python representation choices for existing domain consumers.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PythonOptions {
+    pub mutable_records: std::collections::BTreeSet<String>,
+    pub pydantic_records: std::collections::BTreeSet<String>,
+    pub slots: bool,
+    /// Use Python 3.11+ string enums with wire-preserving str().
+    pub str_enum: bool,
+    /// Preserve Python Literal contracts for value sets that are not lifecycle tags.
+    pub literal_value_sets: bool,
+    /// Value sets that retain enum members even in Literal mode.
+    pub enum_value_sets: std::collections::BTreeSet<String>,
 }
 
 /// The result of the `check` the generator ran before printing.
@@ -60,6 +77,12 @@ pub enum CheckStatus {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodegenError {
+    #[error("codegen: unsupported default `{value}` for column `{column}`")]
+    InvalidDefault { column: String, value: String },
+    #[error("codegen: Python representation option refers to unknown record `{0}`")]
+    UnknownPythonRecord(String),
+    #[error("codegen: Python representation option refers to unknown value set `{0}`")]
+    UnknownPythonValueSet(String),
     #[error("codegen: two declarations generate the type name `{name}`: {first} and {second}")]
     NameCollision {
         name: String,
@@ -76,6 +99,20 @@ pub fn generate(
 ) -> Result<String, CodegenError> {
     let refine = matches!(options.check, CheckStatus::Passed { .. });
     let mut domain = build(model, refine, site)?;
+    for name in options
+        .python
+        .mutable_records
+        .union(&options.python.pydantic_records)
+    {
+        if !domain.records.iter().any(|record| &record.name == name) {
+            return Err(CodegenError::UnknownPythonRecord(name.clone()));
+        }
+    }
+    for name in &options.python.enum_value_sets {
+        if !domain.enums.iter().any(|value_set| &value_set.name == name) {
+            return Err(CodegenError::UnknownPythonValueSet(name.clone()));
+        }
+    }
     if let CheckStatus::Failed { errors } = &options.check {
         for error in errors {
             let id = format!("O{}", domain.obligations.len() + 1);
@@ -260,7 +297,7 @@ pub fn build(
         let mut fields = Vec::new();
         for column in &entity.columns {
             let ty = column_type(model, key, entity, column, &id_of, &mut names, &mut domain)?;
-            fields.push(field(column, ty));
+            fields.push(field(column, ty)?);
         }
         let fields = distinct_fields(fields);
         let doc = doc_of(&entity.label, entity.description.as_deref());
@@ -310,7 +347,7 @@ pub fn build(
                 }
                 other => value_type(model, other),
             };
-            fields.push(field(column, ty));
+            fields.push(field(column, ty)?);
         }
         domain.records.push(RecordDecl {
             name,
@@ -471,8 +508,13 @@ fn column_type(
 
 fn value_type(model: &SemanticModel, col_type: &ColumnType) -> FieldType {
     match col_type {
+        ColumnType::Record(key) => FieldType::Record(type_ident(&model.dtos[*key].id)),
+        ColumnType::List(item) => FieldType::List(Box::new(value_type(model, item))),
+        ColumnType::Tuple(item) => FieldType::Tuple(Box::new(value_type(model, item))),
         ColumnType::Variation(v) => FieldType::Enum(type_ident(&model.variations[*v].id)),
-        other => FieldType::Scalar(scalar_of(other).unwrap_or(Scalar::String)),
+        other => FieldType::Scalar(
+            scalar_of(other).expect("inline enums are named before resolving scalar field types"),
+        ),
     }
 }
 
@@ -485,7 +527,11 @@ fn scalar_of(col_type: &ColumnType) -> Option<Scalar> {
         ColumnType::Decimal => Scalar::Decimal,
         ColumnType::Date => Scalar::Date,
         ColumnType::DateTime => Scalar::DateTime,
-        ColumnType::Enum(_) | ColumnType::Variation(_) => return None,
+        ColumnType::Enum(_)
+        | ColumnType::Variation(_)
+        | ColumnType::Record(_)
+        | ColumnType::List(_)
+        | ColumnType::Tuple(_) => return None,
     })
 }
 
@@ -528,7 +574,7 @@ fn enum_value(wire: &str, label: Option<String>) -> EnumValue {
     }
 }
 
-fn field(column: &ModelColumn, ty: FieldType) -> Field {
+fn field(column: &ModelColumn, ty: FieldType) -> Result<Field, CodegenError> {
     let mut doc = Vec::new();
     if let Some(label) = &column.label {
         doc.push(label.clone());
@@ -545,13 +591,44 @@ fn field(column: &ModelColumn, ty: FieldType) -> Field {
             expr.display()
         ));
     }
-    Field {
+    let default = match column.default_val.as_deref() {
+        None => None,
+        Some("null") if column.is_nullable && !column.default_quoted => Some(FieldDefault::Null),
+        Some(value) => Some(match &ty {
+            FieldType::Scalar(Scalar::String) => FieldDefault::Text(value.to_string()),
+            FieldType::Scalar(
+                Scalar::Money | Scalar::Decimal | Scalar::Date | Scalar::DateTime,
+            ) => FieldDefault::ScalarText(value.to_string()),
+            FieldType::Scalar(Scalar::Bool) if value == "true" || value == "false" => {
+                FieldDefault::Bool(value == "true")
+            }
+            FieldType::Scalar(Scalar::Int) if value.parse::<i64>().is_ok() => FieldDefault::Int(
+                value
+                    .parse()
+                    .expect("integer defaults were validated before construction"),
+            ),
+            FieldType::Enum(_) => FieldDefault::Enum(value.to_string()),
+            FieldType::List(_) | FieldType::Tuple(_)
+                if value == "empty" && !column.default_quoted =>
+            {
+                FieldDefault::Empty
+            }
+            _ => {
+                return Err(CodegenError::InvalidDefault {
+                    column: column.name.clone(),
+                    value: value.to_string(),
+                })
+            }
+        }),
+    };
+    Ok(Field {
         wire: column.name.clone(),
         pascal: type_ident(&column.name),
         ty,
         nullable: column.is_nullable,
+        default,
         doc,
-    }
+    })
 }
 
 /// Fields whose PascalCase names coincide (`due_at` and `dueAt`) keep the first and number
@@ -741,7 +818,7 @@ pub(crate) fn type_ident(id: &str) -> String {
     let mut out = String::new();
     let mut upper = true;
     for ch in id.chars() {
-        if ch == '_' || ch == '-' || ch == ' ' {
+        if !ch.is_ascii_alphanumeric() {
             upper = true;
             continue;
         }
@@ -766,6 +843,9 @@ pub(crate) fn string_literal(value: &str) -> String {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii_control() => out.push_str(&format!("\\x{:02x}", c as u32)),
             c => out.push(c),
         }
     }

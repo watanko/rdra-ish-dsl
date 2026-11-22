@@ -525,3 +525,12 @@ pub struct Ast {
     pub comments: Vec<Comment>,
     pub source: std::string::String,
 }
+
+/// Whether a wire value needs string syntax rather than the legacy bare-value grammar.
+pub fn value_needs_quotes(value: &str) -> bool {
+    let mut chars = value.chars();
+    !chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}

@@ -887,6 +887,7 @@ dependencies = [
  "rdra-ish-emit",
  "rdra-ish-syntax",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -916,6 +917,7 @@ dependencies = [
  "insta",
  "rdra-ish-core",
  "rdra-ish-syntax",
+ "serde",
  "serde_json",
  "thiserror",
 ]

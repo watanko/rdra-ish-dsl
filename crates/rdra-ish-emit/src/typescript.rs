@@ -141,6 +141,10 @@ fn ts_type_for_field(
 /// The TypeScript type of a column's declared type.
 fn ts_column_type(model: &SemanticModel, col_type: &ColumnType) -> String {
     match col_type {
+        ColumnType::Record(key) => model.dtos[*key].id.clone(),
+        ColumnType::List(item) | ColumnType::Tuple(item) => {
+            format!("ReadonlyArray<{}>", ts_column_type(model, item))
+        }
         ColumnType::Int | ColumnType::Money | ColumnType::Decimal => "number".to_string(),
         ColumnType::String => "string".to_string(),
         ColumnType::DateTime | ColumnType::Date => "Date".to_string(),

@@ -59,6 +59,10 @@ pub enum FieldType {
     /// A list of rows of a record or row type: the rows a `.has` / `.none` ranges over.
     /// Only a function input has it.
     Rows(String),
+    /// Embedded contract records and their ordered collections.
+    Record(String),
+    List(Box<FieldType>),
+    Tuple(Box<FieldType>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,7 +97,20 @@ pub struct Field {
     pub pascal: String,
     pub ty: FieldType,
     pub nullable: bool,
+    pub default: Option<FieldDefault>,
     pub doc: Vec<String>,
+}
+
+/// A constructor default, preserved as a typed value rather than a display comment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FieldDefault {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Text(String),
+    ScalarText(String),
+    Enum(String),
+    Empty,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

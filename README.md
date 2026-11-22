@@ -155,6 +155,7 @@ rdra-ish verify samples/formal-verification/order.rdra --backend tlc -o /tmp/rdr
   `verify --deny-undecided`
 - `samples/personal-info`: personal data management sample
 - `samples/api-contract`: API contract metadata and the OpenAPI export
+- `samples/python-domain`: nested Python domains, constructor defaults, and representation options
 - `skills/rdra-ish-verify/samples`: TLA+/TLC examples (also linked from
   `samples/formal-verification/` and, for a model that must fail,
   `samples/formal-verification-fail/`; check files individually)

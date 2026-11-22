@@ -4,6 +4,12 @@
 
 ### Added
 
+- DTO fields support embedded DTOs, `List(T)`, and `Tuple(T)` with typed schema exports.
+  Wire values that need punctuation may be quoted without relaxing bare identifier syntax.
+- Experimental Python code generation preserves declared constructor defaults and supports
+  explicit mutable/slotted dataclasses, Literal value sets, and opt-in Pydantic records
+  through `--python-config`. Record names and option keys are validated.
+
 - `verify --prove` marks each rule the SQL export's schema does not enforce (the rules under
   `Not enforced by this schema`) with `[not enforced by the SQL schema: <why>]`, and counts
   how many of them the use cases are proved to keep (#141).

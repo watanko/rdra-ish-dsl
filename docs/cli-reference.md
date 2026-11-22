@@ -1428,7 +1428,7 @@ carries a `witness`: a shortest path to the first state that holds it, as `start
 
 ## `codegen` (experimental)
 
-Print the model's domain types as TypeScript, Rust, or Go code for an agent to finish.
+Print the model's domain types as TypeScript, Rust, Go, or Python code for an agent to finish.
 This subcommand is an experimental extra: neither it, its flags, its exit status, nor the
 code it prints is covered by [compatibility](./compatibility.md), and any release may
 change or remove them. [The design](./design/algebraic-codegen.md) describes where it is
@@ -1444,7 +1444,35 @@ rdra-ish codegen <INPUTS...> --lang <LANG> [-o <FILE>] [--package <NAME>] [--all
 | `--lang` | `ts` \| `rust` \| `go` \| `py` | — (required) | Language. `typescript` is an alias of `ts`, and `python` is an alias of `py`. |
 | `-o`, `--out` | path | — (stdout) | Write to this file instead of stdout. |
 | `--package` | string | `domain` | The Go package name (`--lang go` only). |
+| `--python-config` | JSON file | — | Python representation options; only valid with `--lang py`. See below. |
 | `--allow-failing` | flag | off | Generate even when `check` reports errors. The state types then narrow no column, and each error is listed as an obligation the model does not meet. |
+
+Python configuration keeps representation choices separate from domain values:
+
+```json
+{
+  "mutable_records": ["ChecklistItem", "Checklist"],
+  "pydantic_records": ["Settings"],
+  "slots": true,
+  "literal_value_sets": true,
+  "enum_value_sets": ["ErrorCategory"],
+  "str_enum": true
+}
+```
+
+Records are frozen dataclasses by default. `mutable_records` selects editable records;
+`slots` applies to dataclasses. `pydantic_records` opts named records into Pydantic 2
+models with forbidden extra fields and the selected mutability. Pydantic is a dependency
+of the importing application, not of the compiler or default output. Unknown option keys
+and unknown record names fail generation.
+
+`literal_value_sets` emits Python `Literal` aliases for value sets other than lifecycle
+tags. `enum_value_sets` retains named enums when attributes need their members.
+`str_enum` uses Python 3.11+ `StrEnum`; otherwise enums retain the default Python 3.10
+representation. Constructor defaults are read from `@default`, including nullable `null`
+and collection `empty`; lists use factories rather than shared mutable defaults. When a
+default precedes a required dataclass field, its constructor uses keyword-only arguments.
+See [the executable sample](../samples/python-domain/README.md).
 
 The output is one compilation unit: a TypeScript module, a Rust module file, or a Go file.
 It opens with a header and the numbered **obligations**: what `check` and `verify` assume of

@@ -376,6 +376,9 @@ fn col_type_s(
 ) -> String {
     use rdra_ish_core::model::ColumnType;
     match ct {
+        ColumnType::Record(key) => model.dtos[*key].id.clone(),
+        ColumnType::List(_) => "List".to_string(),
+        ColumnType::Tuple(_) => "Tuple".to_string(),
         ColumnType::Int => "Int".to_string(),
         ColumnType::String => "String".to_string(),
         ColumnType::Money => "Money".to_string(),

@@ -49,7 +49,7 @@ impl Emitter for ScreenMermaidEmitter {
             .screens
             .keys()
             .map(NodeRef::Screen)
-            .filter(|node| visible(node))
+            .filter(&visible)
             .filter_map(|node| Some((contract_id(model, &node)?, node)))
             .collect();
         screens.sort_by(|a, b| a.0.cmp(&b.0));

@@ -140,7 +140,7 @@ impl Emitter for ContextMermaidEmitter {
                 (RelKind::Performs, actor @ NodeRef::Actor(_), target) if in_scope(target) => {
                     let bucs: Vec<NodeRef> = bucs_of(model, target)
                         .into_iter()
-                        .filter(|buc| in_scope(buc))
+                        .filter(&in_scope)
                         .collect();
                     let vias: Vec<(String, String)> = if bucs.is_empty() {
                         via_of(target).into_iter().collect()
@@ -153,7 +153,7 @@ impl Emitter for ContextMermaidEmitter {
                     let usecases: Vec<NodeRef> = targets(model, event, RelKind::Triggers)
                         .iter()
                         .flat_map(|target| usecases_of(model, target))
-                        .filter(|usecase| in_scope(usecase))
+                        .filter(&in_scope)
                         .collect();
                     if usecases.is_empty() {
                         continue;

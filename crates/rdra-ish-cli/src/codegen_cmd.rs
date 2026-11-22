@@ -18,7 +18,25 @@ pub fn run_codegen(
     out: Option<&Path>,
     package: &str,
     allow_failing: bool,
+    python_config: Option<&Path>,
 ) -> Result<()> {
+    let python = match python_config {
+        Some(path) => {
+            if !matches!(lang, CodegenLang::Python) {
+                anyhow::bail!("--python-config requires --lang py");
+            }
+            serde_json::from_slice(
+                &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
+            )
+            .with_context(|| {
+                format!(
+                    "invalid Python representation options in {}",
+                    path.display()
+                )
+            })?
+        }
+        None => Default::default(),
+    };
     let Project {
         program,
         model,
@@ -59,6 +77,7 @@ pub fn run_codegen(
         );
     };
     let options = Options {
+        python,
         lang: match lang {
             CodegenLang::Ts => Lang::TypeScript,
             CodegenLang::Rust => Lang::Rust,

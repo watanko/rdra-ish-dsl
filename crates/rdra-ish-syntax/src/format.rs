@@ -327,9 +327,14 @@ fn instance_lines(instance: &InstanceDecl) -> Vec<Line> {
             .variation_values
             .iter()
             .map(|value| {
+                let wire = if value_needs_quotes(&value.value) {
+                    quote_string(&value.value)
+                } else {
+                    value.value.clone()
+                };
                 let text = match &value.label {
-                    Some(label) => format!("{} {}", value.value, quote_string(label)),
-                    None => value.value.clone(),
+                    Some(label) => format!("{} {}", wire, quote_string(label)),
+                    None => wire,
                 };
                 (text, value.span.start)
             })

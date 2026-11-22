@@ -277,6 +277,7 @@ fn dbml_type(model: &SemanticModel, entity: &Entity, column: &ModelColumn) -> St
             None => "datetime".to_string(),
         },
         ColumnType::Date => "date".to_string(),
+        ColumnType::Record(_) | ColumnType::List(_) | ColumnType::Tuple(_) => "json".to_string(),
         ColumnType::Bool => "boolean".to_string(),
         ColumnType::Enum(_) => dbml_ident(&enum_type_name(entity, column)),
         ColumnType::Variation(key) => model

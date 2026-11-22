@@ -1,0 +1,22 @@
+module python_domain
+
+variation Model "Model" {
+  "model-3.1"
+  "model-3.8"
+}
+
+dto Settings "Validated settings" {
+  selected: Model
+}
+
+dto ChecklistItem "Checklist item" {
+  id: String
+  value: String
+  corrected: Bool @null @default(null)
+}
+
+dto Checklist "Editable checklist" {
+  items: List(ChecklistItem) @default(empty)
+  categories: Tuple(String) @default(empty)
+  settings: Settings @null @default(null)
+}
