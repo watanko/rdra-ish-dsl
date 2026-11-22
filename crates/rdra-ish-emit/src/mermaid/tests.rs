@@ -1,5 +1,8 @@
+use super::event::{declare_flow_node, render_event_flow, Declared, FlowNode};
 use super::*;
-use crate::diagram_common::{declare_flow_node, model_from, render_event_flow, Declared, FlowNode};
+use crate::diagram_common::model_from;
+use crate::diagram_common::NodeScope;
+use crate::{Emitter, Explored, StatesEmitter, View};
 use rdra_ish_core::build_model;
 use rdra_ish_syntax::parse;
 
@@ -80,7 +83,7 @@ entity Order "Order" { id: Int @pk }
 performs(Customer, PlaceOrder)
 invokes(PlaceOrder, OrderApi)
 creates(OrderApi, Order)
-displays(PlaceOrder, Order)
+reads(PlaceOrder, Order)
 "#;
     let model = model_from(src);
     let view = View::whole().with_graph_filters(
@@ -103,9 +106,9 @@ displays(PlaceOrder, Order)
         result.contains("%% kinds: usecase api entity\n"),
         "{result}"
     );
-    // The header names what the filters hid: the actor, and the displays edge whose
+    // The header names what the filters hid: the actor, and the reads edge whose
     // ends are both drawn.
-    assert!(result.contains("%% omitted: actor displays\n"), "{result}");
+    assert!(result.contains("%% omitted: actor reads\n"), "{result}");
 }
 
 #[test]
@@ -192,6 +195,29 @@ relate(Order, Customer, N:1)
     assert!(result.contains("Customer {"));
     assert!(result.contains("Int id PK"));
     assert!(result.contains("}}o--||") || result.contains("}o--||"));
+}
+
+#[test]
+fn test_er_mermaid_orders_relations_by_entity_id() {
+    let mut src = String::from("entity Hub \"H\" { id: Int @pk }\n");
+    let ids = ["K", "J", "I", "H", "G", "F", "E", "D", "C", "B", "A"];
+    for id in ids {
+        src.push_str(&format!("entity {id} \"{id}\" {{ id: Int @pk }}\n"));
+    }
+    for id in ids {
+        src.push_str(&format!("relate({id}, Hub, N:1)\n"));
+    }
+    let model = model_from(&src);
+    let result = ErMermaidEmitter.emit(&model, &View::er()).unwrap();
+    let froms: Vec<&str> = result
+        .lines()
+        .filter(|line| line.ends_with(": \"\""))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    assert_eq!(
+        froms,
+        ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]
+    );
 }
 
 #[test]
@@ -819,8 +845,8 @@ transitions(ReviewClaim, Claim.status, open -> reviewed)
     let mut out = String::new();
     let mut declared = Declared::default();
 
-    render_event_flow(&mut out, &mut declared, &model, &None, &flow);
-    render_event_flow(&mut out, &mut declared, &model, &None, &flow);
+    render_event_flow(&mut out, &mut declared, &model, &NodeScope::All, &flow);
+    render_event_flow(&mut out, &mut declared, &model, &NodeScope::All, &flow);
 
     assert_eq!(
         out.matches("  event__EncounterSigned>\"Encounter Signed\"]:::event\n")
@@ -889,7 +915,7 @@ raises(SignEncounter, EncounterSigned)
     let flow = rdra_ish_core::collect_event_flows(&model).pop().unwrap();
     let mut out = String::new();
     let mut declared = Declared::default();
-    let reachable = Some(HashSet::new());
+    let reachable = NodeScope::Only(HashSet::new());
 
     render_event_flow(&mut out, &mut declared, &model, &reachable, &flow);
 

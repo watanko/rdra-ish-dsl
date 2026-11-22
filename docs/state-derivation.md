@@ -8,7 +8,9 @@ state columns are reachable, and does any reachable state break a declared rule?
 The tool builds one transition system from the model and explores it by breadth-first
 search (BFS). `states`, `check`, `diagram`, `csv`, `list`, `export`, and the
 TypeScript unions read the explored states. `export --kind tla` and `verify` print the
-same transition system as TLA+ for TLC (see [formal-verification.md](./formal-verification.md)).
+same transition system as TLA+ for TLC (see [formal-verification.md](./formal-verification.md)),
+and `verify --prove` encodes it for z3, for any number of rows
+([Proofs for any number of rows](./formal-verification.md#proofs-for-any-number-of-rows)).
 No second reading of the model exists, so BFS and TLC cannot disagree on what a use case
 does. The test `engine_equivalence` checks that on every sample.
 
@@ -460,7 +462,7 @@ cone of influence:
   system projected onto the cone, except where an action of the cone also creates an
   entity the cone does not read: the cone drops that creation and never runs out of that
   entity's slots (see [Bounds](#bounds)), so it reaches a superset. The cone is not an
-  approximation. The test `cone_exploration_equals_the_projection_of_the_whole_component` in
+  approximation. The test `cone_exploration_equals_the_projection_of_the_whole_system` in
   `crates/rdra-ish-core/src/lifecycle/tests/cone.rs` checks equality on `ec-site`,
   `personal-info`, and the formal-verification samples, and the superset where a cone
   frees slots.
@@ -750,8 +752,7 @@ checked. Another use case that runs between two steps changes the run's rows, an
 assert sees that.
 
 ```rdra
-after(ExecuteCertIssue)
-  .assert(CertificateOrder.status == executed, ClientCertificate.status == active)
+after(ExecuteCertIssue).assert(CertificateOrder.status == executed, ClientCertificate.status == active)
 ```
 
 An entity the last step binds reads that row: the row the step writes, the row an earlier
@@ -837,7 +838,6 @@ these names, and the `// expect` headers of the samples list the names of the er
 | `TriggerNeverRuns { usecase, event, site }` | `TriggerNeverRuns_<E>_<usecase>_<event>` | info | A use case that several tracked events trigger never runs after this event, while it runs after another: the variant `<usecase>_by_<event>` carries no edge on a cone that ran to the end. `Runs_<usecase>` is not raised, since the use case runs. A variant that did not fire only on cones that stopped at the cap is not decided (`whether <usecase>_by_<event> can run`). |
 | `UnboundCopySource { usecase, column, source, reason }` | `UnboundCopySource_<E>_<usecase>_<column>` | error | A `sets(UC, E.col == F.src)` names an `F` that the step binds to no one row: not written by this or an earlier step of the use case and not the target's parent, a child of the target, or the parent of a child created unlinked. The copy is not applied. |
 | `AmbiguousOwnerLink { statement, a, b, roles, rewrite }` | `AmbiguousOwnerLink_<E>_<a>_<b>` | error | A `.has/.none(...)`, a `holds` body, or a copy joins two entities that several keys join, and no `.role(role)` names one. The message names the candidate roles and the statement with the `.role` to add; the join is left unlinked. |
-| `UnresolvedPropertyAtom { property, column }` | `UnresolvedPropertyAtom_<E>_<property>_<column>` | error | A `property` atom names a column that no single entity owns. |
 | `DerivedColumnRead { column }` | `DerivedColumnRead_<entity>_<column>` | error | A constraint, condition, assertion, or property reads an arithmetic `@derived` column, which the lifecycle cannot evaluate. |
 | `ConstraintViolated { name, ... }` | the rule's name, such as `Forbidden_Order_0` | error | A reachable state breaks a `forbidden`, `invariant`, `required`, `exclusive`, `@check`, multi-entity, or quantifier rule. |
 | `AfterAssertViolated { anchor, ... }` | `AfterAssert_<anchor>_<i>` | error | A step of the anchor use case ends in a state that fails the assertion. |
@@ -859,14 +859,16 @@ these names, and the `// expect` headers of the samples list the names of the er
   that lead into a row that reaches it, and those that delete an instance in it. A use case
   that touches the entity without changing a column is not listed. An Int axis prints its
   values (`stock[0..5]`). An entity with no state column prints `(no state axes)`.
-- `csv`. One row per pattern and column, with `entity_id`, `pattern_idx`, `column`,
-  `value`, `is_initial`, `is_terminal`, and `via`.
+- `csv`. One row per pattern and column, with `entity_id`, `entity_label`, `pattern_idx`,
+  `column`, `value`, `is_initial`, `is_terminal`, and `via`.
 - `json`. One object per entity with `axes` (each with its `domain`), `patterns`,
-  `diagnostics`, `no_creation_path`, and the entity id and label. An Int domain lists
-  `"0"` to `"5"`. Each pattern has a `witness`: `start` (the instances a pre-existing
-  entity starts with), `steps` (each with `action`, `usecase`, `bound`, `changes`, and the
-  use case's `site`), and `over_bound`. A change is `create`, `delete`, `set` (with the
-  `site` of the arm or `sets` that wrote it), or `tick`.
+  `diagnostics`, `no_creation_path`, `reachable`, `truncated`, and the entity id and
+  label. An Int domain lists `"0"` to `"5"`. Each pattern has a `witness`: `start` (the
+  instances a pre-existing entity starts with), `steps` (each with `action`, `usecase`,
+  `bound`, `changes`, and the use case's `site`), `over_bound`, and `free_triggers` (each
+  `usecase` that ran without its `event` having been raised, see **Raised marks** under
+  [Exploration by cone of influence](#exploration-by-cone-of-influence)). A change is
+  `create`, `delete`, `set` (with the `site` of the arm or `sets` that wrote it), or `tick`.
 - `typescript`. One union per entity. The union reads the same views.
 
 All formats honor `--entity <id>`, `--buc <id>`, `--max-patterns <n>`, and `--max-states <n>`. `--buc`

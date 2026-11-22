@@ -9,7 +9,7 @@ use crate::lifecycle::types::{
     Action, ActionOrigin, Birth, CmpOp, Domain, Effect, EntId, EntityDecl, Guard, GuardWhy,
     ModelRef, Pred, Site, Start, Term, Value, VarId, VarKind,
 };
-use crate::model::{ColumnType, EffectValue, EntityKey, Min, ModelColumn, SetValue, UseCaseKey};
+use crate::model::{ColumnType, EntityKey, Min, ModelColumn, UseCaseKey};
 use crate::tx::{infer_usecase_transactions, WriteKind};
 
 impl Builder<'_> {
@@ -122,7 +122,7 @@ impl Builder<'_> {
                 if !self.named.any.contains(&key) {
                     return None;
                 }
-                let values = model.variations.get(*vk)?.values.clone();
+                let values = model.variations.get(*vk)?.value_names();
                 if values.is_empty() {
                     return None;
                 }
@@ -169,21 +169,12 @@ impl Builder<'_> {
             }
             _ => return None,
         };
-        let pg_type = model
-            .column_effects
-            .iter()
-            .filter(|ce| ce.entity == ek && ce.column == col.name)
-            .find_map(|ce| match &ce.value {
-                SetValue::Value(EffectValue::TypedPresent(t)) => Some(t.clone()),
-                _ => None,
-            });
         let var = self.push_var(
             VarKind::Column {
                 entity: e,
                 column: col.name.clone(),
                 lifecycle: model.is_lifecycle_column(ek, &col.name),
                 variation,
-                pg_type,
             },
             domain,
             base,
@@ -294,8 +285,6 @@ impl Builder<'_> {
         }
     }
 
-    // ── R-now ────────────────────────────────────────────────────────────────
-
     pub(super) fn clock(&mut self) {
         if self.named.reads_now {
             let var = self.push_var(
@@ -328,6 +317,4 @@ impl Builder<'_> {
             effects: vec![Effect::Tick],
         })
     }
-
-    // ── Actions: R-create, R-delete, R-update, R-bind ────────────────────────
 }

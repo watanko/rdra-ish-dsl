@@ -8,11 +8,14 @@ pub mod diagnostics;
 pub mod entity_lifecycle;
 pub mod entity_state_variant;
 pub mod event_flow;
+mod fasthash;
 pub mod import_scope;
 pub mod lifecycle;
 pub mod lint;
 pub mod location;
 pub mod model;
+mod parallel;
+pub use parallel::{in_parallel, jobs};
 pub mod predicate;
 pub mod project;
 pub mod publication;
@@ -24,7 +27,6 @@ pub mod screen_flow;
 pub mod surface;
 pub mod system;
 pub mod tx;
-pub mod typed_predicate;
 pub mod workspace;
 
 pub use access::{
@@ -53,16 +55,14 @@ pub use location::{
     push_model_decl_diagnostic, DeclIndex, DeclSite, DiagCtxt, LocatedSpan, Position, SourceId,
 };
 pub use model::{
-    Adr, AdrKey, Api, ApiKey, AppliesToTarget, ColumnEffect, ConstrainsTarget, ContainedRef,
-    ContainerRef, CoversTarget, CrossCmpRhs, CrossComparisonProp, CrossEntityCondition,
-    CrossEntityInvariant, CrossForbiddenConstraint, DecidesTarget, EffectValue, EntityKey,
-    EntityTouchpoint, ExclusiveConstraint, LookupResult, Medium, MediumKey, NfrOrConstraint,
-    PerformTarget, Permission, PermissionKey, QualifiedModelColumnRef, Raiser, RequiredConstraint,
-    SemanticModel, StateTransition, System, SystemKey, TemporalAtom, TemporalExpr, TemporalFormula,
-    TemporalProperty, TemporalRhs, Timer, TimerKey, TriggerSource, TriggerTarget, TypedPredicate,
+    Adr, AdrKey, Api, ApiKey, ColumnEffect, CrossCmpRhs, CrossComparisonProp, CrossEntityCondition,
+    CrossEntityInvariant, CrossForbiddenConstraint, EffectValue, EntityCondition, EntityKey,
+    EntityRule, LookupResult, Medium, MediumKey, Permission, PermissionKey,
+    QualifiedModelColumnRef, Raiser, SemanticModel, StateTransition, System, SystemKey,
+    TemporalAtom, TemporalExpr, TemporalFormula, TemporalProperty, TemporalRhs, Timer, TimerKey,
 };
 pub use model::{CallerKind, Exposed, Exposure, Publication, PublishMode, Share};
-pub use predicate::{predicate_signature, KNOWN_PREDICATES};
+pub use predicate::KNOWN_PREDICATES;
 pub use project::{
     collect_rdra_files, discover, load_project, root_include_paths, Manifest, ModelSection,
     Project, ProjectError,
@@ -78,7 +78,6 @@ pub use system::{derive_system_boundaries, system_diagnostics, SystemBoundary};
 pub use tx::{
     infer_usecase_transactions, tx_diagnostics, TxGroup, TxKind, UcWrite, UsecaseTx, WriteKind,
 };
-pub use typed_predicate::{build_typed_predicate, collect_typed_predicates, typed_predicate_name};
 pub use workspace::{
     analyze_project, analyze_workspace, consistency_diagnostics, WorkspaceAnalysis,
 };

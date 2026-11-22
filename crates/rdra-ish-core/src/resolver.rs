@@ -1,6 +1,7 @@
 use crate::diagnostics::{Diagnostic, RdraError};
 use crate::location::{LocatedSpan, SourceId};
 use crate::model::SemanticModel;
+use crate::parallel::{in_parallel, jobs};
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rdra_ish_syntax::{ast::*, format_parse_error, parse_with_deprecations, Parsed};
@@ -42,8 +43,10 @@ pub fn resolve_overlaid(
     let mut graph: DiGraph<SourceId, ()> = DiGraph::new();
     let mut node_indices: Vec<NodeIndex> = vec![];
 
-    // BFS: collect all reachable files.
-    let mut queue: VecDeque<PathBuf> = entry_paths.iter().cloned().collect();
+    // Breadth-first over imports, one depth at a time. The files of a depth parse in
+    // parallel; ids, diagnostics and the next depth follow the order a one-file-at-a-time
+    // walk of the same queue would give.
+    let mut frontier: Vec<PathBuf> = entry_paths.to_vec();
     let mut queued: HashSet<PathBuf> = HashSet::new();
     for p in entry_paths {
         if let Ok(c) = dunce::canonicalize(p) {
@@ -51,56 +54,50 @@ pub fn resolve_overlaid(
         }
     }
 
-    while let Some(path) = queue.pop_front() {
-        let canon = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-
-        if path_to_id.contains_key(&canon) {
-            continue;
-        }
-
-        let src = match read_source(&canon, overlays) {
-            Ok(text) => text,
-            Err(e) => {
-                diags.push(Diagnostic::error(RdraError::IoError {
-                    path: canon.display().to_string(),
-                    msg: e.to_string(),
-                }));
+    while !frontier.is_empty() {
+        let mut read: Vec<(PathBuf, String)> = Vec::new();
+        let mut taken: HashSet<PathBuf> = HashSet::new();
+        for path in frontier.drain(..) {
+            let canon = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if path_to_id.contains_key(&canon) || taken.contains(&canon) {
                 continue;
             }
-        };
-
-        let id: SourceId = sources.len();
-
-        let ast = take_parsed(parse_with_deprecations(&src), id, &canon, &mut diags);
-        let ni = graph.add_node(id);
-        path_to_id.insert(canon.clone(), id);
-        node_indices.push(ni);
-
-        // Collect imports before moving ast into sources.
-        let imports: Vec<ImportDecl> = ast
-            .items
-            .iter()
-            .filter_map(|item| {
-                if let Item::Import(imp) = item {
-                    Some(imp.clone())
-                } else {
-                    None
+            match read_source(&canon, overlays) {
+                Ok(text) => {
+                    taken.insert(canon.clone());
+                    read.push((canon, text));
                 }
-            })
-            .collect();
+                Err(e) => diags.push(Diagnostic::error(RdraError::IoError {
+                    path: canon.display().to_string(),
+                    msg: e.to_string(),
+                })),
+            }
+        }
 
-        sources.push((canon.clone(), src, ast));
+        let parsed = in_parallel(read, jobs(), |(canon, src)| {
+            let parsed = parse_with_deprecations(&src);
+            (canon, src, parsed)
+        });
+        for (canon, src, parsed) in parsed {
+            let id: SourceId = sources.len();
+            let ast = take_parsed(parsed, id, &canon, &mut diags);
+            node_indices.push(graph.add_node(id));
+            path_to_id.insert(canon.clone(), id);
 
-        // Enqueue unvisited dependencies. An import with no file at its path may name a
-        // module a loaded file declares; `build_import_scopes` reports it when none does.
-        for imp in &imports {
-            if let Some(dep_path) = resolve_import_path(&imp.path, include_paths) {
-                let dep_canon = dunce::canonicalize(&dep_path).unwrap_or(dep_path.clone());
-                if !queued.contains(&dep_canon) {
-                    queued.insert(dep_canon);
-                    queue.push_back(dep_path);
+            // An import with no file at its path may name a module a loaded file declares;
+            // `build_import_scopes` reports it when none does.
+            for item in &ast.items {
+                let Item::Import(imp) = item else {
+                    continue;
+                };
+                if let Some(dep_path) = resolve_import_path(&imp.path, include_paths) {
+                    let dep_canon = dunce::canonicalize(&dep_path).unwrap_or(dep_path.clone());
+                    if queued.insert(dep_canon) {
+                        frontier.push(dep_path);
+                    }
                 }
             }
+            sources.push((canon, src, ast));
         }
     }
 
@@ -470,108 +467,105 @@ fn name_missing_imports(model: &SemanticModel, diags: &mut [Diagnostic]) {
     }
 }
 
-/// Return all `NodeRef`s reachable from a BUC node via RDRA relations (forward BFS only).
-/// ER entity-to-entity relations (Relate*) are intentionally excluded so that shared
-/// entities don't pull in unrelated BUCs through the ER graph.
-pub fn reachable_from_buc(model: &SemanticModel, buc_id: &str) -> HashSet<crate::model::NodeRef> {
-    use crate::model::{NodeRef, RelKind};
-    let mut visited: HashSet<NodeRef> = HashSet::new();
-
-    let buc_key = model.symbols.get(buc_id).and_then(|nr| {
-        if let NodeRef::Buc(k) = nr {
-            Some(*k)
-        } else {
-            None
-        }
-    });
-
-    let Some(buc_key) = buc_key else {
-        return visited;
-    };
-
-    let start = NodeRef::Buc(buc_key);
-    let mut queue = vec![start.clone()];
-    visited.insert(start);
-
-    // 前向き BFS: ER entity-entity 関係を除くすべての forward 関係を辿る
-    while let Some(current) = queue.pop() {
-        for rel in &model.relations {
-            if matches!(
-                rel.kind,
-                RelKind::RelateOneToOne
-                    | RelKind::RelateOneToMany
-                    | RelKind::RelateManyToOne
-                    | RelKind::RelateManyToMany
-            ) {
-                continue;
-            }
-            if rel.from == current && !visited.contains(&rel.to) {
-                visited.insert(rel.to.clone());
-                queue.push(rel.to.clone());
-            }
-        }
-    }
-
-    // 閉包内のユースケースを起動するイベント（外部システムからの inbound）も閉包に入れる。
-    // 前向き BFS は inbound イベントに到達しない。
-    let inbound: Vec<NodeRef> = model
-        .relations
-        .iter()
-        .filter(|rel| {
-            rel.kind == RelKind::Triggers
-                && matches!(rel.from, NodeRef::Event(_))
-                && visited.contains(&rel.to)
-        })
-        .map(|rel| rel.from.clone())
-        .collect();
-    visited.extend(inbound);
-
-    // 第2パス: 起点 BUC に直接 performs している Actor と、閉包内へ入る Timer（triggers）/
-    // 外部システム（raises）/ 条件（applies_to）を追加する（推移的探索はしない — 他 BUC への連鎖を防ぐ）。
-    // 条件はそのバリエーションも連れてくる（バリエーションは関係では閉包に入らない）。
-    let buc_ref = NodeRef::Buc(buc_key);
-    let mut sources = Vec::new();
-    for rel in &model.relations {
-        let enters = match (&rel.kind, &rel.from) {
-            (RelKind::Performs, _) => rel.to == buc_ref,
-            (RelKind::Triggers, NodeRef::Timer(_))
-            | (RelKind::Raises, NodeRef::ExtSystem(_))
-            | (RelKind::AppliesTo | RelKind::Guards, NodeRef::Condition(_)) => {
-                visited.contains(&rel.to)
-            }
-            _ => false,
-        };
-        if enters {
-            if let NodeRef::Condition(condition) = &rel.from {
-                for edge in crate::analysis::condition_edges(model, *condition) {
-                    if let crate::analysis::ConditionEdge::Variation(variation) = edge {
-                        sources.push(NodeRef::Variation(variation));
-                    }
-                }
-            }
-            sources.push(rel.from.clone());
-        }
-    }
-    visited.extend(sources);
-
-    visited
-}
-
-/// Return the union of `reachable_from_buc` for each BUC id in `buc_ids`.
-/// When `buc_ids` is empty the result is an empty set (callers should treat
+/// Return the union of the closures of the BUCs `buc_ids` names. An id that names no BUC
+/// adds nothing. When `buc_ids` is empty the result is an empty set (callers should treat
 /// that as "show everything" / `Scope::Whole`).
 pub fn reachable_from_bucs(
     model: &SemanticModel,
     buc_ids: &[String],
 ) -> HashSet<crate::model::NodeRef> {
+    use crate::model::NodeRef;
+    let bucs =
+        buc_ids
+            .iter()
+            .filter_map(|id| match model.symbols.lookup_qualified(&Kind::Buc, id) {
+                Some(NodeRef::Buc(buc)) => Some(*buc),
+                _ => None,
+            });
+    reachable_from_buc_keys(model, bucs)
+}
+
+/// Return the union of the closures of `bucs`. The closure of a BUC is every `NodeRef`
+/// reachable from it via RDRA relations (forward BFS only), the events that trigger a use case
+/// in it, and the actors, timers, external systems and conditions that enter it directly.
+/// ER entity-to-entity relations (Relate*) are intentionally excluded so that shared
+/// entities don't pull in unrelated BUCs through the ER graph.
+pub fn reachable_from_buc_keys(
+    model: &SemanticModel,
+    bucs: impl IntoIterator<Item = crate::model::BucKey>,
+) -> HashSet<crate::model::NodeRef> {
+    use crate::model::{NodeRef, RelKind};
+    let mut forward: HashMap<&NodeRef, Vec<&NodeRef>> = HashMap::new();
+    for rel in &model.relations {
+        if !matches!(
+            rel.kind,
+            RelKind::RelateOneToOne
+                | RelKind::RelateOneToMany
+                | RelKind::RelateManyToOne
+                | RelKind::RelateManyToMany
+        ) {
+            forward.entry(&rel.from).or_default().push(&rel.to);
+        }
+    }
+
     let mut union = HashSet::new();
-    for id in buc_ids {
-        union.extend(reachable_from_buc(model, id));
+    for buc_key in bucs {
+        let start = NodeRef::Buc(buc_key);
+        let mut visited: HashSet<NodeRef> = HashSet::from([start.clone()]);
+        let mut queue = vec![start];
+        while let Some(current) = queue.pop() {
+            for to in forward.get(&current).into_iter().flatten() {
+                if visited.insert((*to).clone()) {
+                    queue.push((*to).clone());
+                }
+            }
+        }
+
+        // 閉包内のユースケースを起動するイベント（外部システムからの inbound）も閉包に入れる。
+        // 前向き BFS は inbound イベントに到達しない。
+        let inbound: Vec<NodeRef> = model
+            .relations
+            .iter()
+            .filter(|rel| {
+                rel.kind == RelKind::Triggers
+                    && matches!(rel.from, NodeRef::Event(_))
+                    && visited.contains(&rel.to)
+            })
+            .map(|rel| rel.from.clone())
+            .collect();
+        visited.extend(inbound);
+
+        // 第2パス: 起点 BUC に直接 performs している Actor と、閉包内へ入る Timer（triggers）/
+        // 外部システム（raises）/ 条件（applies_to）を追加する（推移的探索はしない — 他 BUC への連鎖を防ぐ）。
+        // 条件はそのバリエーションも連れてくる（バリエーションは関係では閉包に入らない）。
+        let buc_ref = NodeRef::Buc(buc_key);
+        let mut sources = Vec::new();
+        for rel in &model.relations {
+            let enters = match (&rel.kind, &rel.from) {
+                (RelKind::Performs, _) => rel.to == buc_ref,
+                (RelKind::Triggers, NodeRef::Timer(_))
+                | (RelKind::Raises, NodeRef::ExtSystem(_))
+                | (RelKind::AppliesTo | RelKind::Guards, NodeRef::Condition(_)) => {
+                    visited.contains(&rel.to)
+                }
+                _ => false,
+            };
+            if enters {
+                if let NodeRef::Condition(condition) = &rel.from {
+                    for edge in crate::analysis::condition_edges(model, *condition) {
+                        if let crate::model::CombinesTarget::Variation(variation) = edge {
+                            sources.push(NodeRef::Variation(variation));
+                        }
+                    }
+                }
+                sources.push(rel.from.clone());
+            }
+        }
+        visited.extend(sources);
+        union.extend(visited);
     }
     union
 }
-
-use std::collections::VecDeque;
 
 #[cfg(test)]
 mod tests;

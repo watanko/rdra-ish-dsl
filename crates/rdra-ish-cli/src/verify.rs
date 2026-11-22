@@ -23,13 +23,13 @@ use rdra_ish_core::lifecycle::{
     Bounds, BoundsLine, Caps, Cone, LtlKind, NotChecked, Scope, Selection, Severity, StateDiag,
     Target, TransitionSystem, VarSet,
 };
-use rdra_ish_core::{ResolvedProgram, SemanticModel};
+use rdra_ish_core::{in_parallel, jobs, ResolvedProgram, SemanticModel};
 use rdra_ish_emit::tla::{self, PrintMode, TlaBundle, TlaNames};
 
-use crate::export::{checked_system, tla_bounds, Modules};
-use crate::list_output::{render_violation, Finding, TraceSource};
-use crate::property_cone::{ConeRun, PropertyCone, Verdict};
-use crate::prove::{run_proof, Marks, ProofTally};
+use crate::export::{checked_system, tla_bounds, tla_file, Modules};
+use crate::property_cone::{AfterPlain, ConeRun, PropertyCone, Verdict};
+use crate::prove::{find_z3, run_proof, Marks, ProofTally};
+use crate::state_findings::{render_violation, Finding, TraceSource};
 use crate::tlc_env::{tlc_env, Heap};
 use crate::tlc_output::{progress, summarize, Outcome, TlcRun};
 use crate::tlc_replay::{explain_property, explain_violation};
@@ -102,6 +102,17 @@ impl Job {
             JobKind::Whole(_) => Heap::Temporal,
         }
     }
+
+    /// A guess at how long the run takes, to start the long ones first: a temporal property
+    /// before a safety cone, since TLC also searches its behavior graph, then the system with
+    /// more variables.
+    fn weight(&self) -> (bool, usize) {
+        match &self.kind {
+            JobKind::Cone(cone) => (false, cone.system.var_ids().count()),
+            JobKind::PropertyCone(p) => (true, p.cone.reduced.var_ids().count()),
+            JobKind::Whole(_) => (true, usize::MAX),
+        }
+    }
 }
 
 /// A cone as TLC checks it: the whole system's cone, its restricted system, and the names
@@ -112,24 +123,41 @@ struct ConeSystem {
     names: TlaNames,
 }
 
+/// What a run decides about its checks.
+enum Decision {
+    Decided(Outcome),
+    /// The property is not decided, and why. `capped`: the whole-model run stopped at the
+    /// state cap, not at the time budget.
+    Undecided {
+        why: String,
+        capped: bool,
+    },
+}
+
+impl Decision {
+    /// What the run adds to the verdict of the whole: an undecided property fails nothing.
+    fn outcome(&self) -> Outcome {
+        match self {
+            Decision::Decided(outcome) => *outcome,
+            Decision::Undecided { .. } => Outcome::Ok,
+        }
+    }
+}
+
 struct Ran {
-    outcome: Outcome,
+    decision: Decision,
     /// The run whose counterexample is explained: the last one of the job.
     run: TlcRun,
     log: String,
     /// What the run line says after the state count.
     notes: Vec<String>,
-    /// The property is not decided, and why.
-    undecided: Option<String>,
-    /// The whole-model run stopped at the state cap, not at the time budget.
-    capped: bool,
 }
 
 impl Ran {
     fn line(&self, module: &str, checks: &[String]) -> String {
-        let verdict = match self.undecided {
-            Some(_) => "not decided",
-            None => self.outcome.as_str(),
+        let verdict = match &self.decision {
+            Decision::Undecided { .. } => "not decided",
+            Decision::Decided(outcome) => outcome.as_str(),
         };
         let mut inside: Vec<String> = self
             .run
@@ -150,19 +178,10 @@ impl Ran {
 /// and names the whole-model module `X`; any other `-o` is a directory.
 fn out_dir(out: Option<PathBuf>) -> Result<(PathBuf, String, bool)> {
     let (dir, whole, keep) = match out {
-        Some(path) if path.extension().is_some_and(|e| e == "tla") => {
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("RdraSpec")
-                .to_string();
-            let parent = match path.parent() {
-                Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-                _ => PathBuf::from("."),
-            };
-            (parent, stem, true)
-        }
-        Some(path) => (path, "RdraSpec".to_string(), true),
+        Some(path) => match tla_file(&path) {
+            Some((parent, stem)) => (parent, stem, true),
+            None => (path, "RdraSpec".to_string(), true),
+        },
         None => (
             std::env::temp_dir().join(format!("rdra-ish-tlc-{}", std::process::id())),
             "RdraSpec".to_string(),
@@ -205,31 +224,33 @@ fn cone_jobs(
             }
         }
     }
-    order
+    // The names are claimed in target order; reducing and printing a cone reads nothing of
+    // another, so the cones are prepared side by side.
+    let named: Vec<(Cone, String, Vec<Target>)> = order
         .into_iter()
-        .map(|(cone, first, shared)| {
-            let seeds = shared.iter().map(|t| ts.target_seed(*t));
-            let sub = ts.reduced_cone(&cone, seeds, Caps::VERIFY);
-            let module = modules.claim(&format!("Cone_{first}"));
-            let bundle = tla::print(&sub, PrintMode::Safety, &module);
-            let n = &bundle.names;
-            let checks = (0..sub.invariants().len())
-                .map(|i| n.invariant(i).to_string())
-                .chain((0..sub.after_asserts().len()).map(|i| n.after(i).to_string()))
-                .collect();
-            Job {
-                module: bundle.module_name,
-                tla: bundle.tla,
-                cfg: bundle.cfg,
-                checks,
-                kind: JobKind::Cone(Box::new(ConeSystem {
-                    cone,
-                    system: sub,
-                    names: bundle.names,
-                })),
-            }
-        })
-        .collect()
+        .map(|(cone, first, shared)| (cone, modules.claim(&format!("Cone_{first}")), shared))
+        .collect();
+    in_parallel(named, jobs(), |(cone, module, shared)| {
+        let seeds = shared.iter().map(|t| ts.target_seed(*t));
+        let sub = ts.reduced_cone(&cone, seeds, Caps::VERIFY);
+        let bundle = tla::print(&sub, PrintMode::Safety, &module);
+        let n = &bundle.names;
+        let checks = (0..sub.invariants().len())
+            .map(|i| n.invariant(i).to_string())
+            .chain((0..sub.after_asserts().len()).map(|i| n.after(i).to_string()))
+            .collect();
+        Job {
+            module: bundle.module_name,
+            tla: bundle.tla,
+            cfg: bundle.cfg,
+            checks,
+            kind: JobKind::Cone(Box::new(ConeSystem {
+                cone,
+                system: sub,
+                names: bundle.names,
+            })),
+        }
+    })
 }
 
 /// One run per temporal property on its cone, module `Cone_<property>`, with the `_WF`
@@ -240,12 +261,17 @@ fn property_jobs(ts: &TransitionSystem, names: &TlaNames, modules: &mut Modules)
     let plain: Vec<String> = (0..ts.properties().len())
         .map(|i| modules.claim(&format!("Cone_{}", names.property(i))))
         .collect();
+    // Reducing a property's cone reads nothing of another's; the `_Full` and `_WF` names are
+    // claimed afterwards, in property order.
+    let cones = in_parallel((0..plain.len()).collect(), jobs(), |i| {
+        PropertyCone::new(ts, i)
+    });
     plain
         .into_iter()
+        .zip(cones)
         .enumerate()
-        .map(|(i, module)| {
+        .map(|(i, (module, cone))| {
             let name = names.property(i);
-            let cone = PropertyCone::new(ts, i);
             let plain = cone.bundle(ConeRun::Plain, &module);
             let spec = |b: TlaBundle| Spec {
                 module: b.module_name,
@@ -303,11 +329,25 @@ fn whole_job(ts: &TransitionSystem, names: &TlaNames, module: &str, i: usize) ->
 fn run_job(tlc: &Tlc, dir: &Path, modules: &Modules, job: &Job, workers: &str) -> Result<Ran> {
     let cfg = format!("{}.cfg", job.module);
     let safety = matches!(job.kind, JobKind::Cone(_));
+    // With several workers TLC reaches the same states, so an `ok` is the `ok` of one
+    // worker, but it no longer finds a violation by the shortest trace, nor the same one on
+    // every run. A safety cone that does not pass is therefore run again on one worker, and
+    // only that run is reported. A property's lasso differs from run to run on one worker too.
+    let workers = match (safety, workers) {
+        (true, many) if many != "1" => {
+            let ran = run_cfg(tlc, dir, &job.module, job.heap(), &cfg, many, safety)?;
+            if ran.decision.outcome() == Outcome::Ok {
+                return Ok(ran);
+            }
+            "1"
+        }
+        _ => workers,
+    };
     let mut ran = run_cfg(tlc, dir, &job.module, job.heap(), &cfg, workers, safety)?;
     match &job.kind {
         JobKind::Cone(cs) => {
             let mut reruns = 0;
-            while ran.outcome == Outcome::Counterexample {
+            while ran.decision.outcome() == Outcome::Counterexample {
                 let found = ran.run.violated_names();
                 if found.len() >= job.checks.len() {
                     break;
@@ -328,17 +368,20 @@ fn run_job(tlc: &Tlc, dir: &Path, modules: &Modules, job: &Job, workers: &str) -
         }
         JobKind::PropertyCone(p) => {
             let (cone, wf) = (&p.cone, &p.wf);
-            let mut plain = ran.outcome;
+            let mut plain = ran.decision.outcome();
             // A counterexample on the reduced cone is real, but its lasso is read on the
             // unreduced cone, whose run gives the verdict from here on.
             if let (Outcome::Counterexample, Some(full)) = (plain, &p.full) {
                 let cfg = format!("{}.cfg", full.module);
                 let more = run_cfg(tlc, dir, &full.module, job.heap(), &cfg, workers, false)?;
-                ran.notes
-                    .push(format!("{}: {}", full.module, more.outcome.as_str()));
+                ran.notes.push(format!(
+                    "{}: {}",
+                    full.module,
+                    more.decision.outcome().as_str()
+                ));
                 ran.log.push_str(&more.log);
                 ran.run = more.run;
-                plain = match more.outcome {
+                plain = match more.decision.outcome() {
                     Outcome::Ok => {
                         ran.notes.push(
                             "the reduced cone finds a counterexample the cone does not (a tool bug)"
@@ -349,29 +392,33 @@ fn run_job(tlc: &Tlc, dir: &Path, modules: &Modules, job: &Job, workers: &str) -
                     other => other,
                 };
             }
-            let mut verdict = cone.verdict(plain, None);
-            if verdict == Verdict::NeedsWfNext {
-                let wf = wf
-                    .as_ref()
-                    .expect("an eventually or leads_to has a WF module");
-                let cfg = format!("{}.cfg", wf.module);
-                let more = run_cfg(tlc, dir, &wf.module, job.heap(), &cfg, workers, false)?;
-                verdict = cone.verdict(plain, Some(more.outcome));
-                ran.notes
-                    .push(format!("{}: {}", wf.module, more.outcome.as_str()));
-                ran.log.push_str(&more.log);
-                ran.run = more.run;
-            }
-            ran.outcome = match verdict {
-                Verdict::Ok => Outcome::Ok,
-                Verdict::Counterexample => Outcome::Counterexample,
-                Verdict::ToolError => Outcome::ToolError,
-                Verdict::Undecided(why) => {
-                    ran.undecided = Some(why.as_str().to_string());
-                    ran.notes.push(why.as_str().to_string());
-                    Outcome::Ok
+            let verdict = match cone.after_plain(plain) {
+                AfterPlain::Decided(verdict) => verdict,
+                AfterPlain::NeedsWfNext => {
+                    let wf = wf
+                        .as_ref()
+                        .expect("an eventually or leads_to has a WF module");
+                    let cfg = format!("{}.cfg", wf.module);
+                    let more = run_cfg(tlc, dir, &wf.module, job.heap(), &cfg, workers, false)?;
+                    let wf_outcome = more.decision.outcome();
+                    ran.notes
+                        .push(format!("{}: {}", wf.module, wf_outcome.as_str()));
+                    ran.log.push_str(&more.log);
+                    ran.run = more.run;
+                    cone.after_wf(plain, wf_outcome)
                 }
-                Verdict::NeedsWfNext => unreachable!("the WF run answers it"),
+            };
+            ran.decision = match verdict {
+                Verdict::Ok => Decision::Decided(Outcome::Ok),
+                Verdict::Counterexample => Decision::Decided(Outcome::Counterexample),
+                Verdict::ToolError => Decision::Decided(Outcome::ToolError),
+                Verdict::Undecided(why) => {
+                    ran.notes.push(why.as_str().to_string());
+                    Decision::Undecided {
+                        why: why.as_str().to_string(),
+                        capped: false,
+                    }
+                }
             };
         }
         JobKind::Whole(_) => {}
@@ -428,12 +475,10 @@ fn run_cfg(
     );
     let run = TlcRun::parse(&log);
     Ok(Ran {
-        outcome: run.outcome(output.status.success()),
+        decision: Decision::Decided(run.outcome(output.status.success())),
         run,
         log,
         notes: Vec::new(),
-        undecided: None,
-        capped: false,
     })
 }
 
@@ -534,27 +579,42 @@ fn run_whole(tlc: &Tlc, dir: &Path, job: &Job, workers: &str, budget: Duration) 
     let run = TlcRun::parse(&log);
     let exit_ok = status.is_some_and(|s| s.success());
     // A kill that lands after TLC printed its verdict stops nothing that decides.
-    let (outcome, stopped) = match (stopped, run.verdict()) {
-        (Some(_), Some(outcome)) => (outcome, None),
-        (Some(why), None) => (Outcome::Ok, Some(why)),
-        (None, _) => (run.outcome(exit_ok), None),
+    let (decision, notes) = match (stopped, run.verdict()) {
+        (Some(_), Some(outcome)) => (Decision::Decided(outcome), Vec::new()),
+        (Some(why), None) => (
+            Decision::Undecided {
+                why: why.clone(),
+                capped,
+            },
+            vec![why],
+        ),
+        (None, _) => (Decision::Decided(run.outcome(exit_ok)), Vec::new()),
     };
     Ok(Ran {
-        outcome,
+        decision,
         run,
         log,
-        notes: stopped.iter().cloned().collect(),
-        capped: capped && stopped.is_some(),
-        undecided: stopped,
+        notes,
     })
 }
 
-/// Runs the cone jobs, up to 8 at once with one TLC worker each.
+/// Runs the cone jobs, up to 8 at once. Each run gets the cores divided by the runs at once,
+/// and no fewer than 2 workers on 4 cores or more: most models have a few long cones and
+/// many short ones, and once the short ones are done a long run on one worker would leave
+/// the other cores idle.
 fn run_cones(tlc: &Tlc, dir: &Path, modules: &Modules, jobs: &[Job]) -> Result<Vec<Ran>> {
     let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
-    run_some(jobs, cores.min(8), "1", |job, workers| {
+    let at_once = cores.min(8).min(jobs.len()).max(1);
+    let workers = cone_workers(cores, at_once).to_string();
+    run_some(jobs, at_once, &workers, |job, workers| {
         run_job(tlc, dir, modules, job, workers)
     })
+}
+
+/// TLC workers per cone run when `at_once` runs share `cores`.
+fn cone_workers(cores: usize, at_once: usize) -> usize {
+    let floor = if cores >= 4 { 2 } else { 1 };
+    (cores / at_once).max(floor)
 }
 
 /// Runs the whole-model property jobs, up to 2 at once (each takes the temporal heap) sharing
@@ -568,22 +628,25 @@ fn run_wholes(tlc: &Tlc, dir: &Path, jobs: &[Job], budget: Duration) -> Result<V
     })
 }
 
-/// Runs `jobs` on `threads` threads, each TLC run with `workers` workers, in job order.
+/// Runs `jobs` on `threads` threads, each TLC run with `workers` workers, the heaviest first
+/// (`Job::weight`). The results come back in job order.
 fn run_some(
     jobs: &[Job],
     threads: usize,
     workers: &str,
     run: impl Fn(&Job, &str) -> Result<Ran> + Sync,
 ) -> Result<Vec<Ran>> {
+    let mut order: Vec<usize> = (0..jobs.len()).collect();
+    order.sort_by_key(|i| std::cmp::Reverse(jobs[*i].weight()));
     let next = AtomicUsize::new(0);
     let done: Mutex<Vec<(usize, Result<Ran>)>> = Mutex::new(Vec::new());
     std::thread::scope(|s| {
         for _ in 0..threads.min(jobs.len()) {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::SeqCst);
-                let Some(job) = jobs.get(i) else { break };
-                let ran = run(job, workers);
-                done.lock().expect("lock").push((i, ran));
+            s.spawn(|| {
+                while let Some(&i) = order.get(next.fetch_add(1, Ordering::SeqCst)) {
+                    let ran = run(&jobs[i], workers);
+                    done.lock().expect("lock").push((i, ran));
+                }
             });
         }
     });
@@ -640,12 +703,7 @@ fn model_traces(
             Ok(diag) => {
                 let message = render_violation(program, model, &diag, TraceSource::Tlc)
                     .expect("explain returns a violation");
-                let finding = Finding {
-                    severity: Severity::Error,
-                    name: diag.name(&[]),
-                    message,
-                };
-                finding.to_string()
+                Finding::new(&diag, &[], message).to_string()
             }
             Err(why) => {
                 format!("error: {why}; BFS and TLC disagree (a tool bug). Raw TLC trace follows.")
@@ -685,7 +743,17 @@ pub fn run_tlc(
         true => modules.claim(&whole_name),
         false => whole_name,
     };
-    let mut jobs = cone_jobs(&ts, &names, &selection.targets, &mut modules);
+    // A `.lemma()` rule only helps `--prove`, which keeps a lemma only when it proves it, so
+    // TLC runs no cone for one: a lemma that joins two large cones would cost more than the
+    // rules it helps. `check` still checks it.
+    let lemmas = rdra_ish_core::lifecycle::prove::lemma_invariants(model, &ts);
+    let targets: Vec<Target> = selection
+        .targets
+        .iter()
+        .copied()
+        .filter(|t| !matches!(t, Target::Invariant(i) if lemmas.contains(i)))
+        .collect();
+    let mut jobs = cone_jobs(&ts, &names, &targets, &mut modules);
     let cones = jobs.len();
     let line = print_plan(
         model,
@@ -706,22 +774,47 @@ pub fn run_tlc(
             .map(|i| modules.claim(&format!("{whole_stem}_{}", names.property(i))))
             .collect();
     }
-    let (bfs_errors, capped) = state_models(program, model, &ts, scope, &selection);
-    let proof = match prove {
-        Some(Prove { z3, deny_unproved }) => {
-            let marks = Marks::of(model, &ts);
-            Some(run_proof(&ts, &selection, &marks, z3, deny_unproved)?)
-        }
-        None => None,
+    // TLC starts on the cones while BFS and the proof run here: none reads what another
+    // finds. A failure to write the specs or to find a tool is reported where it was before
+    // the engines ran side by side, after what BFS and the proof print, and starts no TLC run.
+    let written = write_specs_and_index(&dir, &jobs, &whole);
+    let tlc = (!jobs.is_empty()).then(|| Tlc::find(tlc_jar));
+    let z3 = prove.as_ref().map(|p| find_z3(p.z3.clone()));
+    let start = match (&written, &tlc, &z3) {
+        (Ok(_), Some(Ok(tlc)), None | Some(Ok(_))) => Some(tlc),
+        _ => None,
     };
+    let (bfs_errors, capped, proof, cones_ran) = std::thread::scope(|threads| {
+        let cones = start.map(|tlc| threads.spawn(|| run_cones(tlc, &dir, &modules, &jobs)));
+        let (bfs_errors, capped) = state_models(program, model, &ts, scope, &selection);
+        let proof = match (&prove, z3) {
+            (Some(Prove { deny_unproved, .. }), Some(z3)) => z3.and_then(|z3| {
+                let marks = Marks::of(model, &ts);
+                run_proof(&ts, &selection, &marks, &z3, *deny_unproved).map(Some)
+            }),
+            _ => Ok(None),
+        };
+        let cones_ran = cones.map(|cones| match cones.join() {
+            Ok(ran) => ran,
+            Err(panic) => std::panic::resume_unwind(panic),
+        });
+        (bfs_errors, capped, proof, cones_ran)
+    });
     let end = End {
         bfs_errors,
         capped,
         deny_undecided,
-        proof,
+        proof: proof?,
     };
 
-    let (mut index, index_path) = write_specs_and_index(&dir, &jobs, &whole, keep)?;
+    let (mut index, index_path) = written?;
+    if keep {
+        println!(
+            "wrote {} specs and {}",
+            jobs.len() + usize::from(whole.is_some()),
+            index_path.display()
+        );
+    }
 
     if jobs.is_empty() {
         if !keep {
@@ -731,13 +824,13 @@ pub fn run_tlc(
         println!("tlc_result: ok");
         return end.finish(&line, &[]);
     }
-    let tlc = Tlc::find(tlc_jar)?;
-    let mut ran = run_cones(&tlc, &dir, &modules, &jobs)?;
+    let tlc = tlc.expect("a run with jobs looks for TLC")?;
+    let mut ran = cones_ran.expect("TLC started once the specs and the tools were there")?;
     for (job, r) in jobs.iter().zip(&ran) {
         println!("{}", r.line(&job.module, &job.checks));
     }
 
-    run_undecided_wholes(
+    let undecided = run_undecided_wholes(
         (&tlc, dir.as_path()),
         (&ts, &names),
         &whole_modules,
@@ -745,11 +838,16 @@ pub fn run_tlc(
         (&mut jobs, &mut ran),
         (&mut index, index_path.as_path()),
     )?;
-    let undecided: Vec<String> = undecided_lines(&jobs, &ran);
 
-    let outcome = if ran.iter().any(|r| r.outcome == Outcome::Counterexample) {
+    let outcome = if ran
+        .iter()
+        .any(|r| r.decision.outcome() == Outcome::Counterexample)
+    {
         Outcome::Counterexample
-    } else if ran.iter().any(|r| r.outcome == Outcome::ToolError) {
+    } else if ran
+        .iter()
+        .any(|r| r.decision.outcome() == Outcome::ToolError)
+    {
         Outcome::ToolError
     } else {
         Outcome::Ok
@@ -821,7 +919,6 @@ fn write_specs_and_index(
     dir: &Path,
     jobs: &[Job],
     whole: &Option<TlaBundle>,
-    keep: bool,
 ) -> Result<(String, PathBuf)> {
     let mut index = String::new();
     for job in jobs {
@@ -840,18 +937,12 @@ fn write_specs_and_index(
     let index_path = dir.join("cones.txt");
     fs::write(&index_path, &index)
         .with_context(|| format!("failed to write {}", index_path.display()))?;
-    if keep {
-        println!(
-            "wrote {} specs and {}",
-            jobs.len() + usize::from(whole.is_some()),
-            index_path.display()
-        );
-    }
     Ok((index, index_path))
 }
 
 /// Runs the properties the cones leave undecided on the whole model, under the budget, and
-/// appends their jobs and results.
+/// appends their jobs and results. Returns the findings the whole-model runs leave undecided,
+/// one line each.
 fn run_undecided_wholes(
     (tlc, dir): (&Tlc, &Path),
     (ts, names): (&TransitionSystem, &TlaNames),
@@ -859,12 +950,12 @@ fn run_undecided_wholes(
     budget: Duration,
     (jobs, ran): (&mut Vec<Job>, &mut Vec<Ran>),
     (index, index_path): (&mut String, &Path),
-) -> Result<()> {
+) -> Result<Vec<String>> {
     // The properties the cones leave undecided run on the whole model, under the budget.
     let wholes: Vec<Job> = jobs
         .iter()
         .zip(&*ran)
-        .filter(|(_, r)| r.undecided.is_some())
+        .filter(|(_, r)| matches!(r.decision, Decision::Undecided { .. }))
         .filter_map(|(job, _)| match &job.kind {
             JobKind::PropertyCone(p) => {
                 Some(whole_job(ts, names, &whole_modules[p.index], p.index))
@@ -879,17 +970,16 @@ fn run_undecided_wholes(
     if !wholes.is_empty() {
         fs::write(index_path, &index)
             .with_context(|| format!("failed to write {}", index_path.display()))?;
-        for r in &mut *ran {
-            r.undecided = None;
-        }
         let more = run_wholes(tlc, dir, &wholes, budget)?;
         for (job, r) in wholes.iter().zip(&more) {
             println!("{}", r.line(&job.module, &job.checks));
         }
+        let undecided = undecided_lines(&wholes, &more);
         jobs.extend(wholes);
         ran.extend(more);
+        return Ok(undecided);
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// The findings the whole-model runs leave undecided, one line each.
@@ -897,7 +987,9 @@ fn undecided_lines(jobs: &[Job], ran: &[Ran]) -> Vec<String> {
     jobs.iter()
         .zip(ran)
         .filter_map(|(job, r)| {
-            let why = r.undecided.as_ref()?;
+            let Decision::Undecided { why, capped } = &r.decision else {
+                return None;
+            };
             let states = r
                 .run
                 .distinct_states
@@ -905,7 +997,7 @@ fn undecided_lines(jobs: &[Job], ran: &[Ran]) -> Vec<String> {
             Some(format!(
                 "  {}: the whole-model run {why}{states}; {}",
                 job.checks.join(", "),
-                undecided_hint(r.capped)
+                undecided_hint(*capped)
             ))
         })
         .collect()
@@ -924,14 +1016,14 @@ fn fail(
     let failed: Vec<String> = jobs
         .iter()
         .zip(ran)
-        .filter(|(_, r)| r.outcome == outcome)
+        .filter(|(_, r)| r.decision.outcome() == outcome)
         .map(|(job, r)| {
             let mut body = format!(
                 "{} ({}):\n",
                 job.module,
                 dir.join(format!("{}.tla", job.module)).display()
             );
-            if r.outcome == Outcome::Counterexample {
+            if r.decision.outcome() == Outcome::Counterexample {
                 for block in model_traces(program, model, (ts, names), &job.kind, &r.run) {
                     body.push_str(&block);
                     body.push('\n');
@@ -957,8 +1049,8 @@ fn fail(
 
 /// BFS on each selected entity cone at the verify bounds: the `NoWitness` errors, the
 /// `Deadlock`s (errors, or warnings at the bound), and the `NeverRuns` warnings, rendered,
-/// then the `not checked:` block and one summary line. The exploration is dropped before TLC
-/// starts. Returns the errors and the findings a cone left undecided at the state cap.
+/// then the `not checked:` block and one summary line. Returns the errors and the findings a
+/// cone left undecided at the state cap.
 fn state_models(
     program: &ResolvedProgram,
     model: &SemanticModel,
@@ -1114,7 +1206,7 @@ impl Tlc {
             return Ok(Tlc::Jar(jar));
         }
         for candidate in ["tlc", "tlc2"] {
-            if let Ok(path) = which(candidate) {
+            if let Some(path) = find_on_path(candidate) {
                 return Ok(Tlc::Launcher(path));
             }
         }
@@ -1148,19 +1240,34 @@ impl Tlc {
     }
 }
 
-fn which(cmd: &str) -> Result<PathBuf> {
-    let output = Command::new("which")
-        .arg(cmd)
-        .output()
-        .with_context(|| format!("failed to resolve `{cmd}` on PATH"))?;
-    if !output.status.success() {
-        bail!("`{cmd}` not found");
+/// The first `name` on PATH that is a file, also trying the platform's executable suffix.
+pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    let exe = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    std::env::split_paths(&paths).find_map(|dir| {
+        [name, exe.as_str()]
+            .into_iter()
+            .map(|file| dir.join(file))
+            .find(|path| path.is_file())
+    })
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::cone_workers;
+
+    /// The runs at once never get fewer workers than the cores divide into, and a long run
+    /// keeps a second worker once the short ones are done.
+    #[test]
+    fn cone_runs_share_the_cores_and_keep_two_workers_on_four_cores() {
+        assert_eq!(cone_workers(1, 1), 1);
+        assert_eq!(cone_workers(2, 2), 1);
+        assert_eq!(cone_workers(4, 4), 2);
+        assert_eq!(cone_workers(4, 1), 4);
+        assert_eq!(cone_workers(8, 8), 2);
+        assert_eq!(cone_workers(16, 8), 2);
+        assert_eq!(cone_workers(16, 2), 8);
     }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        bail!("`{cmd}` not found");
-    }
-    Ok(PathBuf::from(path))
 }
 
 #[cfg(test)]

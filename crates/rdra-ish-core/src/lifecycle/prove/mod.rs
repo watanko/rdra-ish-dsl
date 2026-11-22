@@ -137,6 +137,24 @@ enum Fall {
     Unknown(String),
 }
 
+/// The candidate set: what each candidate fell for, and whether the fine mined lemmas are in.
+/// A fine lemma waits outside the set until a rule stays unproved without it.
+struct Set<'a> {
+    fell: Vec<Option<Fall>>,
+    fine: &'a BTreeSet<usize>,
+    fine_joined: bool,
+}
+
+impl Set<'_> {
+    fn contains(&self, k: usize) -> bool {
+        self.fell[k].is_none() && (self.fine_joined || !self.fine.contains(&k))
+    }
+
+    fn fallen(&self) -> usize {
+        self.fell.iter().filter(|f| f.is_some()).count()
+    }
+}
+
 /// The invariants of `ts` that come from a rule the model marks `.lemma()`.
 pub fn lemma_invariants(
     model: &crate::model::SemanticModel,
@@ -162,13 +180,16 @@ pub fn lemma_invariants(
         .collect()
 }
 
-/// Proves `rules` (indices into `ts.invariants()`) for any number of rows.
-pub fn prove(
+/// Proves `rules` (indices into `ts.invariants()`) for any number of rows. The checks of one
+/// scope are shared out over `solvers`, at least one; the proof does not depend on how many
+/// there are (`violated_each`).
+pub fn prove<S: Solver + Send>(
     ts: &TransitionSystem,
     rules: &[usize],
-    solver: &mut dyn Solver,
+    solvers: &mut [S],
     options: ProveOptions,
 ) -> Result<Proof, SolverError> {
+    assert!(!solvers.is_empty(), "a proof needs a solver");
     let enc = Enc { ts };
     let mut verdicts: BTreeMap<usize, Verdict> = BTreeMap::new();
     let mut cands = Vec::new();
@@ -181,17 +202,21 @@ pub fn prove(
                 body: inv.body.clone(),
                 all_rows: false,
             };
-            (Origin::Rule(i), f)
+            (Origin::Rule(i), f, false)
         })
-        .chain(lemmas(ts))
+        .chain(lemmas(ts).into_iter().map(|(o, f)| (o, f, false)))
         .chain(
             mine::mine(ts, rules)
                 .into_iter()
-                .map(|(text, f)| (Origin::Lemma(text), f)),
+                .map(|m| (Origin::Lemma(m.text), m.formula, m.fine)),
         );
-    for (origin, formula) in formulas {
+    let mut fine = BTreeSet::new();
+    for (origin, formula, is_fine) in formulas {
         match enc.holds(&formula, Frame::Pre) {
             Ok(pre) => {
+                if is_fine {
+                    fine.insert(cands.len());
+                }
                 let mut reads = VarSet::new();
                 ts.pred_reads(&formula.body, &mut reads);
                 reads.extend(formula.binders.iter().map(|e| ts.entity(*e).exists));
@@ -222,64 +247,94 @@ pub fn prove(
     let mut loose: Vec<String> = steps.iter().flat_map(|s| s.loose.clone()).collect();
     loose.dedup();
 
-    solver.exec(&format!("(reset)\n{}", enc.declarations()))?;
+    let declarations = format!("(reset)\n{}", enc.declarations());
+    for solver in solvers.iter_mut() {
+        solver.exec(&declarations)?;
+    }
 
-    let mut fell: BTreeMap<usize, Fall> = BTreeMap::new();
+    let mut set = Set {
+        fell: vec![None; cands.len()],
+        fine: &fine,
+        fine_joined: false,
+    };
     // Initiation: every candidate holds in every initial state.
     match enc.initial() {
         Ok(init) => {
-            solver.exec(&format!("(push)\n{init}"))?;
-            for (k, c) in cands.iter().enumerate() {
-                let fall = match violated(solver, &enc, c, Frame::Pre)? {
+            let all: Vec<usize> = (0..cands.len()).collect();
+            let answers = violated_each(solvers, &enc, &cands, &all, &init, Frame::Pre)?;
+            for (k, sat) in all.into_iter().zip(answers) {
+                let fall = match sat {
                     Sat::Unsat => continue,
                     Sat::Sat => Fall::Initial,
                     Sat::Unknown => Fall::Unknown("the initial states".to_string()),
                 };
-                fell.insert(k, fall);
+                set.fell[k] = Some(fall);
             }
-            solver.exec("(pop)")?;
         }
         Err(Unsupported(why)) => {
-            for k in 0..cands.len() {
-                fell.insert(k, Fall::Unknown(format!("the initial states ({why})")));
+            for fall in &mut set.fell {
+                *fall = Some(Fall::Unknown(format!("the initial states ({why})")));
             }
         }
     }
 
-    // Consecution, until a round removes nothing: the kept set is then inductive.
+    // The fine lemmas wait: most models prove every rule without them, and they are many.
+    let at_start: BTreeSet<usize> = (0..cands.len())
+        .filter(|k| set.fell[*k].is_some())
+        .collect();
+    // Consecution, until a round removes nothing: the kept set is then inductive. When a rule
+    // fell after initiation, the fine lemmas join, the rules that fell come back (the set that
+    // broke one lacked them), and it runs once more.
     loop {
-        let before = fell.len();
-        for (a, step) in steps.iter().enumerate() {
-            let hit: Vec<usize> = (0..cands.len())
-                .filter(|k| !fell.contains_key(k) && breaks(a, &cands[*k]))
-                .collect();
-            if hit.is_empty() {
-                continue;
+        loop {
+            let before = set.fallen();
+            for (a, step) in steps.iter().enumerate() {
+                let hit: Vec<usize> = (0..cands.len())
+                    .filter(|k| set.contains(*k) && breaks(a, &cands[*k]))
+                    .collect();
+                if hit.is_empty() {
+                    continue;
+                }
+                // The set is asserted once for the step, so a candidate that falls here
+                // still stands for the step's other checks, on one solver or on several.
+                let scope = format!("{}{}", step.commands, assume(&cands, &set));
+                let answers = violated_each(solvers, &enc, &cands, &hit, &scope, Frame::Post)?;
+                for (k, sat) in hit.into_iter().zip(answers) {
+                    let fall = match sat {
+                        Sat::Unsat => continue,
+                        Sat::Sat => Fall::Step(ActId::at_index(a)),
+                        Sat::Unknown => Fall::Unknown(ts.actions()[a].name.clone()),
+                    };
+                    set.fell[k] = Some(fall);
+                }
             }
-            solver.exec(&format!(
-                "(push)\n{}{}",
-                step.commands,
-                assume(&cands, &fell)
-            ))?;
-            for k in hit {
-                let fall = match violated(solver, &enc, &cands[k], Frame::Post)? {
-                    Sat::Unsat => continue,
-                    Sat::Sat => Fall::Step(ActId::at_index(a)),
-                    Sat::Unknown => Fall::Unknown(ts.actions()[a].name.clone()),
-                };
-                fell.insert(k, fall);
+            if set.fallen() == before {
+                break;
             }
-            solver.exec("(pop)")?;
         }
-        if fell.len() == before {
+        let open = cands.iter().enumerate().any(|(k, c)| {
+            matches!(c.origin, Origin::Rule(_)) && set.fell[k].is_some() && !at_start.contains(&k)
+        });
+        let waiting = !set.fine_joined && fine.iter().any(|k| !at_start.contains(k));
+        if !open || !waiting {
             break;
         }
+        set.fine_joined = true;
+        for (k, c) in cands.iter().enumerate() {
+            if matches!(c.origin, Origin::Rule(_)) && !at_start.contains(&k) {
+                set.fell[k] = None;
+            }
+        }
     }
 
-    // Each rule that fell: its step again from the kept set plus the rule, for the CTI.
+    // Each rule that fell: its step again from the kept set plus the rule, for the CTI. The
+    // model z3 gives depends on what the solver has checked before, which depends on how many
+    // solvers shared the checks, so the CTIs come from a solver that starts over.
+    let solver = &mut solvers[0];
+    solver.exec(&declarations)?;
     for (k, c) in cands.iter().enumerate() {
         let Origin::Rule(i) = c.origin else { continue };
-        let verdict = match fell.get(&k) {
+        let verdict = match &set.fell[k] {
             None => Verdict::Proved,
             Some(Fall::Initial) => Verdict::Unproved(Unproved::Initial),
             Some(Fall::Unknown(action)) => Verdict::Unproved(Unproved::Unknown {
@@ -293,7 +348,7 @@ pub fn prove(
                     solver.exec(&format!(
                         "(push)\n{}{}(assert {})\n(push)\n{}",
                         steps[a].commands,
-                        assume(&cands, &fell),
+                        assume(&cands, &set),
                         c.pre,
                         violation(&enc, c, Frame::Post)
                     ))?;
@@ -319,7 +374,7 @@ pub fn prove(
     let kept_lemmas = cands
         .iter()
         .enumerate()
-        .filter(|(k, _)| !fell.contains_key(k))
+        .filter(|(k, _)| set.contains(*k))
         .filter_map(|(_, c)| match &c.origin {
             Origin::Lemma(text) => Some(text.clone()),
             Origin::Rule(_) => None,
@@ -339,11 +394,11 @@ pub fn prove(
 }
 
 /// Asserts every candidate still in the set over the pre-state.
-fn assume(cands: &[Candidate], fell: &BTreeMap<usize, Fall>) -> String {
+fn assume(cands: &[Candidate], set: &Set) -> String {
     cands
         .iter()
         .enumerate()
-        .filter(|(k, _)| !fell.contains_key(k))
+        .filter(|(k, _)| set.contains(*k))
         .map(|(_, c)| format!("(assert {})\n", c.pre))
         .collect()
 }
@@ -354,6 +409,56 @@ fn violation(enc: &Enc, c: &Candidate, frame: Frame) -> String {
         .violation(&c.formula, frame)
         .expect("a candidate that encodes has a violation that encodes");
     format!("{rows}(set-option :timeout {})\n", c.timeout_ms)
+}
+
+/// Whether some state of `scope` violates each of `cands[ks]` in `frame`: one answer per
+/// candidate, in the order of `ks`. The candidates are dealt out to the solvers, each of
+/// which opens `scope` for itself. A check leaves nothing in its solver that another reads,
+/// so the answers are those one solver gives.
+fn violated_each<S: Solver + Send>(
+    solvers: &mut [S],
+    enc: &Enc,
+    cands: &[Candidate],
+    ks: &[usize],
+    scope: &str,
+    frame: Frame,
+) -> Result<Vec<Sat>, SolverError> {
+    let hands = solvers.len().min(ks.len()).max(1);
+    let deal = |solver: &mut S, hand: usize| -> Result<Vec<(usize, Sat)>, SolverError> {
+        solver.exec(&format!("(push)\n{scope}"))?;
+        let mut answers = Vec::new();
+        for (at, k) in ks.iter().enumerate().skip(hand).step_by(hands) {
+            answers.push((at, violated(solver, enc, &cands[*k], frame)?));
+        }
+        solver.exec("(pop)")?;
+        Ok(answers)
+    };
+    let dealt: Vec<_> = if hands == 1 {
+        vec![deal(&mut solvers[0], 0)]
+    } else {
+        std::thread::scope(|threads| {
+            let running: Vec<_> = solvers
+                .iter_mut()
+                .take(hands)
+                .enumerate()
+                .map(|(hand, solver)| threads.spawn(move || deal(solver, hand)))
+                .collect();
+            running
+                .into_iter()
+                .map(|thread| match thread.join() {
+                    Ok(answers) => answers,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                })
+                .collect()
+        })
+    };
+    let mut sat = vec![Sat::Unknown; ks.len()];
+    for answers in dealt {
+        for (at, answer) in answers? {
+            sat[at] = answer;
+        }
+    }
+    Ok(sat)
 }
 
 /// Whether some state of the open scope violates `c` in `frame`.

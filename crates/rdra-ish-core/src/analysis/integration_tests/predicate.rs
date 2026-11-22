@@ -172,6 +172,27 @@ invokes(PlaceOrder, Order)
 }
 
 #[test]
+fn an_ill_typed_predicate_adds_no_relation() {
+    let src = r#"
+usecase PlaceOrder "注文する"
+entity Order "注文" { id: Int @pk }
+invokes(PlaceOrder, Order)
+"#;
+    let (ast, _) = parse(src);
+    let (model, diags) = build_model(&ast);
+    let errors: Vec<String> = diags
+        .iter()
+        .filter(|d| !d.is_warning)
+        .map(|d| d.error.to_string())
+        .collect();
+    assert!(
+        matches!(errors.as_slice(), [only] if only.contains("type mismatch")),
+        "{errors:?}"
+    );
+    assert!(model.relations.is_empty(), "{:?}", model.relations);
+}
+
+#[test]
 fn test_usecase_crud_still_allowed() {
     // 後方互換: usecase が直接 entity を creates しても OK
     let src = r#"
@@ -408,16 +429,6 @@ fn navigates_records_a_screen_transition_and_the_use_case_that_causes_it() {
             ),
         ]
     );
-    let typed = model
-        .typed_predicates
-        .iter()
-        .filter(|p| matches!(p, TypedPredicate::Navigates { .. }))
-        .count();
-    assert_eq!(typed, 2);
-    assert!(model.typed_predicates.iter().any(|p| matches!(
-        p,
-        TypedPredicate::Navigates { via: Some(uc), .. } if model.use_cases[*uc].id == "PlaceOrder"
-    )));
 }
 
 #[test]

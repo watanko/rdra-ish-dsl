@@ -175,7 +175,6 @@ pub fn event_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
             .map(|e| e.id.clone())
             .unwrap_or_default();
 
-        // どの UC からも raises されていない
         if flow.raised_by.is_empty() {
             push_model_decl_diagnostic(
                 model,
@@ -210,16 +209,9 @@ pub fn event_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
 
         // triggers 先 UC がどの BUC にも contains されていない
         for &uc_key in &flow.triggers_ucs {
-            let belongs_to_buc = model
-                .relations
-                .iter()
-                .any(|r| r.kind == RelKind::Contains && r.to == NodeRef::UseCase(uc_key));
+            let belongs_to_buc = !crate::business_flow::bucs_of_use_case(model, uc_key).is_empty();
             if !belongs_to_buc {
-                let uc_id = model
-                    .use_cases
-                    .get(uc_key)
-                    .map(|u| u.id.clone())
-                    .unwrap_or_default();
+                let uc_id = model.use_cases[uc_key].id.clone();
                 push_model_decl_diagnostic(
                     model,
                     &mut diags,
@@ -275,12 +267,6 @@ pub fn event_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
     diags
 }
 
-/// API 整合性の診断を生成する。
-///
-/// - 宣言されたが誰にも invoke されない api → `ApiNeverInvoked` 警告。
-/// - invoke されるが entity を操作しない api → `ApiInvokedButNoEntity` 警告。
-///
-/// `event_diagnostics` と同じパターンで `model.relations` を 1 パス走査する。
 /// Duplicate method+path pairs are hard errors (also run from model build).
 pub fn api_route_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
@@ -311,6 +297,8 @@ pub fn api_route_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
     diags
 }
 
+/// API consistency warnings: an api no use case invokes is `ApiNeverInvoked`; an invoked api
+/// that touches no entity is `ApiInvokedButNoEntity`.
 pub fn api_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
 
@@ -331,7 +319,7 @@ pub fn api_diagnostics(model: &SemanticModel) -> Vec<Diagnostic> {
                 },
                 true,
             );
-            continue; // 未呼出しなら entity 操作の確認は不要
+            continue;
         }
 
         let operates_entity = model.relations.iter().any(|r| {

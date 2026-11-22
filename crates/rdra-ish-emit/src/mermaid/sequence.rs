@@ -8,8 +8,8 @@
 use super::omitted_linked_kinds;
 use super::robustness::controls_of;
 use super::usecase::scoped_use_cases;
-use crate::diagram_common::{contract_id, Header};
-use crate::{node_kind_filter_name, EmitError, Emitter, Scope, View};
+use crate::diagram_common::{contract_id, Diagram, Header};
+use crate::{EmitError, Emitter, Scope, View};
 use rdra_ish_core::analysis::{applied_bodies, condition_body_display};
 use rdra_ish_core::model::{
     EffectValue, EntityKey, NodeRef, RelKind, SemanticModel, SetValue, UseCaseKey,
@@ -35,7 +35,7 @@ fn effect_value(value: &EffectValue) -> String {
         EffectValue::EnumVariant(variant) => variant.clone(),
         EffectValue::Bool(flag) => flag.to_string(),
         EffectValue::Int(number) => number.to_string(),
-        EffectValue::Present | EffectValue::TypedPresent(_) => "set".to_string(),
+        EffectValue::Present => "set".to_string(),
         EffectValue::Null => "null".to_string(),
     }
 }
@@ -576,10 +576,7 @@ impl Emitter for SequenceMermaidEmitter {
         };
         let one = matches!(view.scope, Scope::UseCases(_));
         if usecases.is_empty() || (one && usecases.len() != 1) {
-            return Err(EmitError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "a sequence diagram draws one use case, or the use cases of a BUC",
-            )));
+            return Err(EmitError::NoSequence);
         }
         let mut participants = Participants::default();
         let mut script = Script {
@@ -624,14 +621,14 @@ impl Emitter for SequenceMermaidEmitter {
 
         let mut kinds: Vec<&'static str> = Vec::new();
         for node in &nodes {
-            let kind = node_kind_filter_name(node);
+            let kind = node.kind_tag();
             if !kinds.contains(&kind) {
                 kinds.push(kind);
             }
         }
         let drawn: HashSet<NodeRef> = nodes.into_iter().collect();
         let header = Header {
-            diagram: "sequence",
+            diagram: Diagram::Sequence,
             view,
             layers: None,
             omitted: omitted_linked_kinds(model, |node| scoped.contains(node), &drawn, &kinds),
@@ -645,6 +642,19 @@ impl Emitter for SequenceMermaidEmitter {
 mod tests {
     use super::*;
     use crate::diagram_common::model_from;
+
+    #[test]
+    fn a_buc_without_use_cases_has_no_sequence() {
+        let model = model_from("buc Empty \"Empty\"\n");
+        let view = View {
+            scope: Scope::Bucs(vec!["Empty".to_string()]),
+            ..View::whole()
+        };
+        assert!(matches!(
+            SequenceMermaidEmitter.emit(&model, &view),
+            Err(EmitError::NoSequence)
+        ));
+    }
 
     const CLINIC: &str = r#"
 actor Patient "Patient"

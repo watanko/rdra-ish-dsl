@@ -3,9 +3,8 @@
 use crate::{EmitError, Emitter, Scope, View};
 use rdra_ish_core::{
     lifecycle::{
-        derive_states, label_prefix, AbstractValue, ActionOrigin, AxisKind, Caps, Change,
-        EntityStateResult, InvKind, InvText, Provenance, Scope as SystemScope, Site, StateDiag,
-        Trace,
+        derive_states, label_prefix, ActionOrigin, AxisKind, Caps, Change, EntityStateResult,
+        InvText, Provenance, Scope as SystemScope, Site, StateDiag, Trace,
     },
     SemanticModel,
 };
@@ -19,23 +18,6 @@ fn derive_views(model: &SemanticModel, view: &View, caps: Caps) -> Vec<EntitySta
         Scope::Whole | Scope::UseCases(_) => SystemScope::ALL,
     };
     derive_states(model, &scope, caps).views
-}
-
-/// BFS などで `AbstractValue` の表示文字列を取得する。
-/// `axes` から Nullable カラムの pg_type を参照して `present:jsonb` 形式にする。
-fn display_value(col: &str, val: &AbstractValue, result: &EntityStateResult) -> String {
-    if let AbstractValue::Present = val {
-        let pg_type = result.axes.iter().find_map(|ax| {
-            if ax.column == col {
-                if let AxisKind::Nullable { pg_type } = &ax.kind {
-                    return pg_type.as_deref();
-                }
-            }
-            None
-        });
-        return val.display_with_type(pg_type);
-    }
-    val.display_with_type(None)
 }
 
 /// via フィールドを "BucA/UcA, BucB/UcB" 形式に整形する
@@ -60,13 +42,7 @@ fn axis_domain(kind: &AxisKind) -> Vec<String> {
     match kind {
         AxisKind::Enum(v) => v.clone(),
         AxisKind::Bool | AxisKind::Proposition { .. } => vec!["false".into(), "true".into()],
-        AxisKind::Nullable { pg_type } => vec![
-            "null".into(),
-            match pg_type {
-                Some(t) => format!("present:{t}"),
-                None => "present".into(),
-            },
-        ],
+        AxisKind::Nullable => vec!["null".into(), "present".into()],
         AxisKind::Int { max } => ints(*max).collect(),
         AxisKind::NullableInt { max } => std::iter::once("null".to_string())
             .chain(ints(*max))
@@ -75,74 +51,58 @@ fn axis_domain(kind: &AxisKind) -> Vec<String> {
 }
 
 /// A constraint violation in the wording `states` has always used for its kind.
-fn violation_message(kind: &InvKind, text: &InvText, p: &str) -> Option<String> {
-    Some(match (kind, text) {
-        (InvKind::Forbidden, InvText::Conditions(c)) => {
+fn violation_message(text: &InvText, p: &str) -> String {
+    match text {
+        InvText::Forbidden(c) => {
             format!("forbidden state reached: ({c}) in pattern ({p})")
         }
-        (InvKind::Required, InvText::Conditions(c)) => {
+        InvText::Required(c) => {
             format!("required state missing: ({c}) is not satisfied in pattern ({p})")
         }
-        (InvKind::Exclusive, InvText::Conditions(c)) => {
+        InvText::Exclusive(c) => {
             format!("exclusive state conditions co-occur: ({c}) in pattern ({p})")
         }
-        (InvKind::Check, InvText::Conditions(c)) => {
+        InvText::Check(c) => {
             format!("check constraint false: ({c}) in pattern ({p})")
         }
-        (InvKind::Invariant, InvText::WhenThen { guards, requireds }) => format!(
+        InvText::Invariant { guards, requireds } => format!(
             "invariant violated: when ({guards}) holds, ({requireds}) must also hold — but found pattern ({p})"
         ),
-        (
-            InvKind::CrossForbidden,
-            InvText::Cross {
+        InvText::CrossForbidden {
                 entities,
                 conditions,
-            },
-        ) => format!(
+} => format!(
             "multi-entity forbidden state reached across [{entities}]: ({conditions}) in patterns ({p})"
         ),
-        (
-            InvKind::CrossInvariant,
-            InvText::CrossWhenThen {
+        InvText::CrossInvariant {
                 entities,
                 guards,
                 requireds,
-            },
-        ) => format!(
+} => format!(
             "multi-entity invariant violated across [{entities}]: when ({guards}) holds, ({requireds}) must also hold — but found patterns ({p})"
         ),
-        (
-            InvKind::Quantifier,
-            InvText::Quantifier {
+        InvText::Quantifier {
                 anchor,
                 related,
                 constraint,
-            },
-        ) => format!(
+} => format!(
             "to-many quantifier constraint violated from '{anchor}' to '{related}': {constraint} in patterns ({p})"
         ),
-        (
-            InvKind::Unique,
-            InvText::Unique {
+        InvText::Unique {
                 child,
                 parent,
                 role,
-            },
-        ) => format!(
+} => format!(
             "1:1 key shared: two '{child}' rows belong to one '{parent}' through '{role}' in patterns ({p})"
         ),
-        (
-            InvKind::MinCard,
-            InvText::MinCard {
+        InvText::MinCard {
                 child,
                 parent,
                 role,
-            },
-        ) => format!(
+} => format!(
             "minimum children unmet: a '{parent}' has no '{child}' through '{role}' in patterns ({p})"
         ),
-        _ => return None,
-    })
+    }
 }
 
 /// 診断メッセージを文字列化する（severity は `StateDiag::severity`、名前は `StateDiag::name` と共有）
@@ -176,15 +136,15 @@ fn diag_message(d: &StateDiag, entity: &str) -> String {
             )
         }
         StateDiag::ConstraintViolated {
-            kind,
             text,
             label,
             pattern_desc,
             ..
-        } => violation_message(kind, text, pattern_desc).map_or_else(
-            || d.to_string(),
-            |message| format!("{}{message}", label_prefix(label)),
-        ),
+        } => format!(
+"{}{}",
+label_prefix(label),
+violation_message(text, pattern_desc)
+),
         StateDiag::AfterAssertViolated {
             anchor,
             requireds,
@@ -216,7 +176,6 @@ fn diag_message(d: &StateDiag, entity: &str) -> String {
         | StateDiag::UnsupportedComparison { .. }
         | StateDiag::DerivedColumnRead { .. }
         | StateDiag::PropertyViolated { .. }
-        | StateDiag::UnresolvedPropertyAtom { .. }
         | StateDiag::UnjoinedGuardRead { .. }
         | StateDiag::UnjoinedWrite { .. }
         | StateDiag::UnboundAfterRead { .. }
@@ -304,7 +263,6 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
         out.push('\n');
 
         // ── テーブル ────────────────────────────────────────────────
-        // カラム幅の計算
         // Proposition 軸はプレフィックス抜きの axis_key を表示名として使う
         let axis_cols: Vec<String> = r
             .axes
@@ -330,13 +288,12 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
             let col_w = &mut col_widths[i];
             for p in &r.patterns {
                 if let Some(val) = p.pattern.values.get(&ax.column) {
-                    let s = display_value(&ax.column, val, r);
+                    let s = val.display();
                     *col_w = (*col_w).max(s.len());
                 }
             }
         }
 
-        // ヘッダ行
         let header_parts: Vec<String> = axis_cols
             .iter()
             .enumerate()
@@ -349,7 +306,6 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
             .collect();
         out.push_str(&format!("  {}\n", header_parts.join("  ")));
 
-        // セパレータ
         let sep_parts: Vec<String> = col_widths
             .iter()
             .map(|&w| "\u{2500}".repeat(w))
@@ -361,7 +317,6 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
             .collect();
         out.push_str(&format!("  {}\n", sep_parts.join("  ")));
 
-        // データ行
         for p in &r.patterns {
             let vals: Vec<String> = r
                 .axes
@@ -372,7 +327,7 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
                         .pattern
                         .values
                         .get(&ax.column)
-                        .map(|v| display_value(&ax.column, v, r))
+                        .map(|v| v.display())
                         .unwrap_or_else(|| "?".to_string());
                     format!("{:<width$}", v, width = col_widths[i])
                 })
@@ -393,7 +348,6 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
             out.push_str(&format!("  {}\n", vals.join("  ")));
         }
 
-        // フッタ
         out.push_str(&format!(
             "\n  reachable: {}{}/ bound: {}\n",
             r.patterns.len(),
@@ -401,7 +355,6 @@ pub fn render_table(results: &[EntityStateResult], model: &SemanticModel) -> Str
             r.bound()
         ));
 
-        // 診断
         if !r.diagnostics.is_empty() {
             out.push_str("  diagnostics:\n");
             for d in &r.diagnostics {
@@ -471,7 +424,7 @@ pub fn render_csv(results: &[EntityStateResult]) -> Result<String, EmitError> {
                         .pattern
                         .values
                         .get(&ax.column)
-                        .map(|v| display_value(&ax.column, v, r))
+                        .map(|v| v.display())
                         .unwrap_or_default();
                     wtr.write_record([
                         &r.entity_id,
@@ -626,12 +579,10 @@ fn entity_result_to_json(
                 .axes
                 .iter()
                 .filter_map(|ax| {
-                    p.pattern.values.get(&ax.column).map(|v| {
-                        (
-                            ax.column.clone(),
-                            serde_json::json!(display_value(&ax.column, v, r)),
-                        )
-                    })
+                    p.pattern
+                        .values
+                        .get(&ax.column)
+                        .map(|v| (ax.column.clone(), serde_json::json!(v.display())))
                 })
                 .collect();
             serde_json::json!({

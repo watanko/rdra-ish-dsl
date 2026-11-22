@@ -1,7 +1,7 @@
 //! `verify --prove`: the rules z3 proves for any number of rows, printed before TLC runs.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use rdra_ish_core::lifecycle::prove::{self, ProveOptions, RuleProof, Unproved, Verdict, Z3};
@@ -32,7 +32,7 @@ impl ProofTally {
 }
 
 /// `--z3` first, then `RDRA_Z3`, then `z3` on PATH.
-fn find_z3(z3: Option<PathBuf>) -> Result<PathBuf> {
+pub(crate) fn find_z3(z3: Option<PathBuf>) -> Result<PathBuf> {
     let named = z3.or_else(|| {
         std::env::var_os(Z3_ENV)
             .filter(|v| !v.is_empty())
@@ -44,11 +44,7 @@ fn find_z3(z3: Option<PathBuf>) -> Result<PathBuf> {
         }
         return Ok(path);
     }
-    if let Some(path) = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join("z3"))
-            .find(|p| p.is_file())
-    }) {
+    if let Some(path) = crate::verify::find_on_path("z3") {
         return Ok(path);
     }
     bail!(
@@ -92,12 +88,11 @@ pub(crate) fn run_proof(
     ts: &TransitionSystem,
     selection: &Selection,
     marks: &Marks,
-    z3: Option<PathBuf>,
+    binary: &Path,
     deny_unproved: bool,
 ) -> Result<ProofTally> {
     let lemmas = &marks.lemmas;
-    let binary = find_z3(z3)?;
-    let version = Z3::version(&binary).unwrap_or_default();
+    let version = Z3::version(binary).unwrap_or_default();
     let rules: Vec<usize> = selection
         .targets
         .iter()
@@ -106,8 +101,11 @@ pub(crate) fn run_proof(
             _ => None,
         })
         .collect();
-    let mut solver = Z3::start(&binary)?;
-    let proof = prove::prove(ts, &rules, &mut solver, ProveOptions::default())
+    // One z3 per thread `RDRA_JOBS` allows; the proof is the same on any number.
+    let mut solvers = (0..rdra_ish_core::jobs())
+        .map(|_| Z3::start(binary))
+        .collect::<Result<Vec<_>, _>>()?;
+    let proof = prove::prove(ts, &rules, &mut solvers, ProveOptions::default())
         .map_err(|e| anyhow::anyhow!("z3 failed: {e}"))?;
     let (yours, rules): (Vec<&RuleProof>, Vec<&RuleProof>) =
         proof.rules.iter().partition(|r| lemmas.contains(&r.inv));

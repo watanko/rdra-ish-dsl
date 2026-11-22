@@ -5,33 +5,23 @@ use super::{implies, Binding};
 use crate::lifecycle::build::Builder;
 use crate::lifecycle::diag::StateDiag;
 use crate::lifecycle::types::{
-    Action, ActionOrigin, At, Birth, CmpOp, Effect, InvKind, InvText, Invariant, ModelRef,
-    ParamRole, Pred, Rhs, Site, Term, Value, VarId, VarKind,
+    Action, ActionOrigin, At, Birth, CmpOp, Effect, InvText, Invariant, ModelRef, ParamRole, Pred,
+    Rhs, Site, Term, Value, VarId, VarKind,
 };
 use crate::lifecycle::EntId;
-use crate::model::{CmpRhs, ComparisonProp, EffectValue, EntityKey, Min, RefAction, UseCaseKey};
+use crate::model::{CmpRhs, EntityCondition, EntityKey, Min, RefAction, UseCaseKey};
 
 impl Builder<'_> {
-    // ── Invariants ───────────────────────────────────────────────────────────
-
     fn local_binding(ek: EntityKey) -> Binding {
         vec![(ek, At::Bound(0))]
     }
 
-    fn local_conds(
-        &mut self,
-        ek: EntityKey,
-        eqs: &[(String, EffectValue)],
-        cmps: &[ComparisonProp],
-        site: &Site,
-    ) -> Vec<Pred> {
-        let mut out: Vec<Pred> = eqs
-            .iter()
+    fn local_conds(&mut self, ek: EntityKey, conds: &[EntityCondition], site: &Site) -> Vec<Pred> {
+        let mut out: Vec<Pred> = EntityCondition::equals(conds)
             .map(|(c, v)| self.eq_atom(ek, At::Bound(0), c, v, site))
             .collect();
         out.extend(
-            cmps.iter()
-                .map(|p| self.cmp_atom(ek, At::Bound(0), p, site)),
+            EntityCondition::comparisons(conds).map(|p| self.cmp_atom(ek, At::Bound(0), p, site)),
         );
         out
     }
@@ -41,7 +31,6 @@ impl Builder<'_> {
         &mut self,
         prefix: &str,
         idx: usize,
-        kind: InvKind,
         binding: &Binding,
         body: Pred,
         text: InvText,
@@ -51,7 +40,6 @@ impl Builder<'_> {
         let entity = self.model.entities[binding[0].0].id.clone();
         self.ts.invariants.push(Invariant {
             name: format!("{prefix}_{entity}_{idx}"),
-            kind,
             binders: binding.iter().map(|(ek, _)| self.ent_of[ek]).collect(),
             body,
             text,
@@ -64,44 +52,34 @@ impl Builder<'_> {
         let model = self.model;
         for (i, c) in model.forbidden_constraints.iter().enumerate() {
             let site = Site::new(ModelRef::Forbidden(i), &c.site);
-            let conds = self.local_conds(c.entity, &c.conditions, &c.comparisons, &site);
-            let text = InvText::Conditions(local_display(&c.conditions, &c.comparisons));
+            let conds = self.local_conds(c.entity, &c.conditions, &site);
+            let text = InvText::Forbidden(local_display(&c.conditions));
             let b = Self::local_binding(c.entity);
             let body = Pred::Not(Box::new(Pred::And(conds)));
             let label = c.label.clone();
-            self.push_invariant(
-                "Forbidden",
-                i,
-                InvKind::Forbidden,
-                &b,
-                body,
-                text,
-                label,
-                site,
-            );
+            self.push_invariant("Forbidden", i, &b, body, text, label, site);
         }
         for (i, c) in model.entity_invariants.iter().enumerate() {
             let site = Site::new(ModelRef::EntityInvariant(i), &c.site);
-            let guards = self.local_conds(c.entity, &c.guards, &c.guard_comparisons, &site);
-            let reqs = self.local_conds(c.entity, &c.requireds, &c.required_comparisons, &site);
-            let text = InvText::WhenThen {
-                guards: local_display(&c.guards, &c.guard_comparisons),
-                requireds: local_display(&c.requireds, &c.required_comparisons),
+            let guards = self.local_conds(c.entity, &c.guards, &site);
+            let reqs = self.local_conds(c.entity, &c.requireds, &site);
+            let text = InvText::Invariant {
+                guards: local_display(&c.guards),
+                requireds: local_display(&c.requireds),
             };
             let b = Self::local_binding(c.entity);
             let body = implies(Pred::And(guards), Pred::And(reqs));
             let label = c.label.clone();
-            self.push_invariant("Inv", i, InvKind::Invariant, &b, body, text, label, site);
+            self.push_invariant("Inv", i, &b, body, text, label, site);
         }
         for (i, c) in model.required_constraints.iter().enumerate() {
             let site = Site::new(ModelRef::Required(i), &c.site);
-            let conds = self.local_conds(c.entity, &c.conditions, &c.comparisons, &site);
-            let text = InvText::Conditions(local_display(&c.conditions, &c.comparisons));
+            let conds = self.local_conds(c.entity, &c.conditions, &site);
+            let text = InvText::Required(local_display(&c.conditions));
             let b = Self::local_binding(c.entity);
             self.push_invariant(
                 "Required",
                 i,
-                InvKind::Required,
                 &b,
                 Pred::And(conds),
                 text,
@@ -111,27 +89,18 @@ impl Builder<'_> {
         }
         for (i, c) in model.exclusive_constraints.iter().enumerate() {
             let site = Site::new(ModelRef::Exclusive(i), &c.site);
-            let conds = self.local_conds(c.entity, &c.conditions, &c.comparisons, &site);
+            let conds = self.local_conds(c.entity, &c.conditions, &site);
             let mut pairs = Vec::new();
             for x in 0..conds.len() {
                 for y in x + 1..conds.len() {
                     pairs.push(Pred::And(vec![conds[x].clone(), conds[y].clone()]));
                 }
             }
-            let text = InvText::Conditions(local_display(&c.conditions, &c.comparisons));
+            let text = InvText::Exclusive(local_display(&c.conditions));
             let b = Self::local_binding(c.entity);
             let body = Pred::Not(Box::new(Pred::Or(pairs)));
             let label = c.label.clone();
-            self.push_invariant(
-                "Exclusive",
-                i,
-                InvKind::Exclusive,
-                &b,
-                body,
-                text,
-                label,
-                site,
-            );
+            self.push_invariant("Exclusive", i, &b, body, text, label, site);
         }
         self.column_checks();
         self.cross_invariants();
@@ -315,7 +284,6 @@ impl Builder<'_> {
             }
             self.ts.invariants.push(Invariant {
                 name: format!("MinCard_{child}_{role}"),
-                kind: InvKind::MinCard,
                 binders: vec![self.ent_of[&fk.parent]],
                 body: Pred::Exists {
                     entity: self.ent_of[&fk.child],
@@ -369,7 +337,6 @@ impl Builder<'_> {
             let role = fk.role_or(&parent).to_string();
             self.ts.invariants.push(Invariant {
                 name: format!("Unique_{child}_{role}"),
-                kind: InvKind::Unique,
                 binders: vec![c, c],
                 body: Pred::Or(apart),
                 text: InvText::Unique {
