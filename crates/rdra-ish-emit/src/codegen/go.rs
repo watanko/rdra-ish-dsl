@@ -3,6 +3,7 @@
 
 use super::ir::{DomainModel, FieldType, RecordKind, Scalar};
 use super::{header_lines, obligation_lines, one_line, string_literal, Options};
+use crate::codegen::ir::CmpOp;
 
 pub(super) fn print(domain: &DomainModel, options: &Options) -> String {
     let mut out = String::new();
@@ -645,7 +646,32 @@ fn expr(
             op,
             value,
         } => {
-            format!("{}.{} {} {value}", row(*r), field.pascal, op.symbol())
+            let at = format!("{}.{}", row(*r), field.pascal);
+            if field.nullable && matches!(op, CmpOp::Ne) {
+                format!("({at} == nil || *{at} != {value})")
+            } else if field.nullable {
+                format!("({at} != nil && *{at} {} {value})", op.symbol())
+            } else { format!("{at} {} {value}", op.symbol()) }
+        }
+        Expr::FieldCmp { left, left_field, op, right, right_field } => {
+            if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                let l = format!("{}.{}", row(*left), left_field.pascal);
+                let r = format!("{}.{}", row(*right), right_field.pascal);
+                let equal = match (left_field.nullable, right_field.nullable) {
+                    (false, false) => format!("{l} == {r}"),
+                    (true, false) => format!("{l} != nil && *{l} == {r}"),
+                    (false, true) => format!("{r} != nil && {l} == *{r}"),
+                    (true, true) => format!("({l} == nil && {r} == nil) || ({l} != nil && {r} != nil && *{l} == *{r})"),
+                };
+                return if matches!(op, CmpOp::Eq) { format!("({equal})") } else { format!("!({equal})") };
+            }
+            let mut left_at = format!("{}.{}", row(*left), left_field.pascal);
+            let mut right_at = format!("{}.{}", row(*right), right_field.pascal);
+            let mut parts = Vec::new();
+            if left_field.nullable { parts.push(format!("{left_at} != nil")); left_at = format!("*{left_at}"); }
+            if right_field.nullable { parts.push(format!("{right_at} != nil")); right_at = format!("*{right_at}"); }
+            parts.push(format!("{left_at} {} {right_at}", op.symbol()));
+            format!("({})", parts.join(" && "))
         }
         Expr::KeyEq {
             child,

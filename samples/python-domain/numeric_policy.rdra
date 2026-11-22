@@ -1,0 +1,90 @@
+module numeric_policy
+
+entity Numbers "Numeric comparison inputs" {
+  id: Int @pk
+  status: Enum(ready, accepted) @default(ready)
+  left: Int @null
+  right: Int @null
+}
+
+actor Caller "Caller"
+business NumericPolicies "Numeric policy evaluation"
+buc EvaluateNumbers "Evaluate numeric inputs"
+belongs(EvaluateNumbers, NumericPolicies)
+performs(Caller, EvaluateNumbers)
+
+usecase Observe "Observe numeric inputs"
+contains(EvaluateNumbers, Observe)
+creates(Observe, Numbers)
+sets(Observe, Numbers.left == present)
+sets(Observe, Numbers.right == present)
+
+usecase ClearLeft "Observe a missing left input"
+contains(EvaluateNumbers, ClearLeft)
+updates(ClearLeft, Numbers)
+sets(ClearLeft, Numbers.left == null)
+
+usecase ClearRight "Observe a missing right input"
+contains(EvaluateNumbers, ClearRight)
+updates(ClearRight, Numbers)
+sets(ClearRight, Numbers.right == null)
+
+usecase Less "Less than"
+contains(EvaluateNumbers, Less)
+updates(Less, Numbers)
+transitions(Less, Numbers.status, ready -> accepted)
+condition LessGuard "Left is smaller than right"
+holds(LessGuard, Numbers.left < Numbers.right)
+applies_to(LessGuard, Less)
+
+usecase Equal "Equal to"
+contains(EvaluateNumbers, Equal)
+updates(Equal, Numbers)
+transitions(Equal, Numbers.status, ready -> accepted)
+condition EqualGuard "Left equals right"
+holds(EqualGuard, Numbers.left == Numbers.right)
+applies_to(EqualGuard, Equal)
+
+usecase Literal "Less than a literal"
+contains(EvaluateNumbers, Literal)
+updates(Literal, Numbers)
+transitions(Literal, Numbers.status, ready -> accepted)
+condition LiteralGuard "Left is smaller than two"
+holds(LiteralGuard, Numbers.left < 2)
+applies_to(LiteralGuard, Literal)
+
+usecase Missing "Left is missing"
+contains(EvaluateNumbers, Missing)
+updates(Missing, Numbers)
+transitions(Missing, Numbers.status, ready -> accepted)
+condition MissingGuard "Left was not supplied"
+holds(MissingGuard, Numbers.left == null)
+applies_to(MissingGuard, Missing)
+
+usecase NotEqual "Not equal"
+contains(EvaluateNumbers, NotEqual)
+updates(NotEqual, Numbers)
+transitions(NotEqual, Numbers.status, ready -> accepted)
+condition NotEqualGuard "Numbers differ, including one missing operand"
+holds(NotEqualGuard, Numbers.left != Numbers.right)
+applies_to(NotEqualGuard, NotEqual)
+
+usecase Different "Different from a literal"
+contains(EvaluateNumbers, Different)
+updates(Different, Numbers)
+transitions(Different, Numbers.status, ready -> accepted)
+condition DifferentGuard "Missing is distinct from a numeric value"
+holds(DifferentGuard, Numbers.left != 2)
+applies_to(DifferentGuard, Different)
+
+entity OptionalFacts "Nullable predicates supplied by adapters" {
+  value: Int @null
+  other: Int @null
+  flag: Bool @null
+  not_less: Bool @derived(not (value < other))
+}
+
+condition InverseGuard "Negation uses the same nullable ordering semantics"
+holds(InverseGuard, OptionalFacts.not_less == true)
+condition FalseFlag "Missing is distinct from false"
+holds(FalseFlag, OptionalFacts.flag == false)

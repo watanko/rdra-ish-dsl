@@ -31,11 +31,36 @@ pub fn discriminator_column(model: &SemanticModel, entity: EntityKey) -> Option<
 /// `{Entity}_{column}_{value}` when the entity has more than one lifecycle column.
 pub fn state_id(model: &SemanticModel, entity: EntityKey, column: &str, value: &str) -> String {
     let entity_id = &model.entities[entity].id;
+    let value = value_id_component(value);
     if lifecycle_columns(model, entity).len() > 1 {
         format!("{entity_id}_{column}_{value}")
     } else {
         format!("{entity_id}_{value}")
     }
+}
+
+/// Encode arbitrary wire values without collisions with literal identifier values.
+///
+/// A reserved prefix keeps punctuation and Unicode injective while existing ordinary
+/// identifiers retain their published diagram ids. Labels keep the original wire value.
+pub fn value_id_component(value: &str) -> String {
+    const PREFIX: &str = "rdra_hex_";
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && !value.starts_with(PREFIX)
+    {
+        return value.to_string();
+    }
+    format!(
+        "{PREFIX}{}",
+        value
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 /// Derive one state node per value a `transitions` arm moves from or to, labelled by the
@@ -134,4 +159,32 @@ pub fn state_models(model: &SemanticModel) -> Vec<StateModel<'_>> {
         group.transitions.push(transition);
     }
     groups.into_values().collect()
+}
+
+#[cfg(test)]
+mod wire_value_tests {
+    use super::value_id_component;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn wire_values_have_distinct_rendering_identifiers() {
+        let values = [
+            "ready",
+            "a-b",
+            "a_b",
+            "rdra_hex_612d62",
+            "model.3",
+            "値",
+            "",
+        ];
+        let identifiers: BTreeSet<_> = values
+            .iter()
+            .map(|value| value_id_component(value))
+            .collect();
+        assert_eq!(identifiers.len(), values.len());
+        assert_eq!(value_id_component("ready"), "ready");
+        assert!(identifiers.iter().all(|value| value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')));
+    }
 }

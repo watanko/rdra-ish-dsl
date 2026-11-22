@@ -83,6 +83,9 @@ pub fn run_codegen(
             CodegenLang::Rust => Lang::Rust,
             CodegenLang::Go => Lang::Go,
             CodegenLang::Python => Lang::Python,
+            CodegenLang::Policy => Lang::Policy,
+            CodegenLang::PyPolicy => Lang::PythonPolicy,
+            CodegenLang::PySqlPolicy => Lang::PythonSqlPolicy,
         },
         package: package.to_string(),
         model_path: inputs

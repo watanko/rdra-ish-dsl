@@ -7,7 +7,7 @@ use super::*;
 /// An ident, string-lit, or int-lit used as an annotation argument value.
 fn ann_value() -> impl Parser<Token, String, Error = Simple<Token>> + Clone {
     let int_lit = select! { Token::IntLit(s) => s };
-    ident().or(string_lit()).or(int_lit)
+    path_ident().or(string_lit()).or(int_lit)
 }
 
 fn annotation() -> impl Parser<Token, Annotation, Error = Simple<Token>> + Clone {

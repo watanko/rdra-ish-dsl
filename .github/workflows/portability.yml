@@ -32,4 +32,4 @@ jobs:
       - name: Test
         env:
           RDRA_TEST_PYTHON: python
-        run: uv run --isolated --no-project --python 3.13 --with pydantic==2.13.4 cargo test --workspace --locked
+        run: uv run --isolated --no-project --python 3.13 --with pydantic==2.13.4 --with sqlalchemy==2.0.49 cargo test --workspace --locked

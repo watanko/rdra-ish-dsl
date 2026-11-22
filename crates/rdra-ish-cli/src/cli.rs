@@ -538,6 +538,12 @@ pub(crate) enum CodegenLang {
     Go,
     #[value(name = "py", alias = "python")]
     Python,
+    /// Structured conditions and effects for runtime or SQL adapters.
+    Policy,
+    /// Executable scalar decisions from conditions and derived expressions.
+    PyPolicy,
+    /// SQLAlchemy expressions from the same business decisions.
+    PySqlPolicy,
 }
 
 #[derive(ValueEnum, Clone)]

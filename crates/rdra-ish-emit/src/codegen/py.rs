@@ -525,7 +525,7 @@ fn escape_docstring(text: &str) -> String {
     s
 }
 
-fn docstring(lines: &[String], indent: &str) -> String {
+pub(super) fn docstring(lines: &[String], indent: &str) -> String {
     let lines: Vec<String> = lines
         .iter()
         .flat_map(|line| line.lines())

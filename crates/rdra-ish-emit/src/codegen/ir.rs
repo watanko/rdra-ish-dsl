@@ -365,6 +365,14 @@ pub enum Expr {
         op: CmpOp,
         value: i64,
     },
+    /// Compare two numeric columns, requiring every nullable operand to be present.
+    FieldCmp {
+        left: usize,
+        left_field: Field,
+        op: CmpOp,
+        right: usize,
+        right_field: Field,
+    },
     /// The child row's key names the parent row.
     KeyEq {
         child: usize,

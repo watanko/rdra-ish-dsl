@@ -608,7 +608,37 @@ fn expr(
                 CmpOp::Ne => "!==",
                 other => other.symbol(),
             };
-            format!("{}.{} {op} {value}", row(*r), property(&field.wire))
+            let at = format!("{}.{}", row(*r), property(&field.wire));
+            let comparison = format!("{at} {op} {value}");
+            if field.nullable && !matches!(op, "===" | "!==") {
+                format!("({at} !== null && {comparison})")
+            } else {
+                comparison
+            }
+        }
+        Expr::FieldCmp {
+            left,
+            left_field,
+            op,
+            right,
+            right_field,
+        } => {
+            let left_at = format!("{}.{}", row(*left), property(&left_field.wire));
+            let right_at = format!("{}.{}", row(*right), property(&right_field.wire));
+            let operator = match op {
+                CmpOp::Eq => "===",
+                CmpOp::Ne => "!==",
+                other => other.symbol(),
+            };
+            let mut parts = Vec::new();
+            if left_field.nullable && !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                parts.push(format!("{left_at} !== null"));
+            }
+            if right_field.nullable && !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                parts.push(format!("{right_at} !== null"));
+            }
+            parts.push(format!("{left_at} {operator} {right_at}"));
+            format!("({})", parts.join(" && "))
         }
         Expr::KeyEq {
             child,

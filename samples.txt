@@ -30,3 +30,5 @@ samples/formal-verification/temporal_unmet.rdra
 samples/formal-verification/untriggered_sets.rdra
 samples/formal-verification/unwitnessed_state.rdra
 samples/formal-verification-fail/order.rdra
+samples/python-domain/model.rdra
+samples/python-domain/numeric_policy.rdra

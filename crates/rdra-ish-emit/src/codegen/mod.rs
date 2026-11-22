@@ -10,6 +10,7 @@
 mod actions;
 mod go;
 pub mod ir;
+mod policy;
 mod py;
 mod rust;
 mod states;
@@ -33,6 +34,9 @@ pub enum Lang {
     Rust,
     Go,
     Python,
+    Policy,
+    PythonPolicy,
+    PythonSqlPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +81,10 @@ pub enum CheckStatus {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodegenError {
+    #[error("codegen: policy cannot be executed: {0}")]
+    UnsupportedPolicy(String),
+    #[error("codegen: policy serialization failed: {0}")]
+    PolicySerialization(#[from] serde_json::Error),
     #[error("codegen: unsupported default `{value}` for column `{column}`")]
     InvalidDefault { column: String, value: String },
     #[error("codegen: Python representation option refers to unknown record `{0}`")]
@@ -97,6 +105,12 @@ pub fn generate(
     options: &Options,
     site: &dyn Fn(&LocatedSpan) -> Option<String>,
 ) -> Result<String, CodegenError> {
+    if matches!(options.lang, Lang::PythonPolicy | Lang::PythonSqlPolicy) {
+        return policy::print_python(model, options);
+    }
+    if matches!(options.lang, Lang::Policy) {
+        return Ok(policy::print(model, options)?);
+    }
     let refine = matches!(options.check, CheckStatus::Passed { .. });
     let mut domain = build(model, refine, site)?;
     for name in options
@@ -129,6 +143,9 @@ pub fn generate(
         Lang::Rust => rust::print(&domain, options),
         Lang::Go => go::print(&domain, options),
         Lang::Python => py::print(&domain, options),
+        Lang::Policy | Lang::PythonPolicy | Lang::PythonSqlPolicy => {
+            unreachable!("policy output is emitted before language-specific lowering")
+        }
     })
 }
 

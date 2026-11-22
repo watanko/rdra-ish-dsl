@@ -70,7 +70,7 @@
             # Python packaging (maturin bin bindings, uv publish flow)
             pkgs.maturin
             pkgs.uv
-            (pkgs.python3.withPackages (ps: [ ps.pydantic ]))
+            (pkgs.python3.withPackages (ps: [ ps.pydantic ps.sqlalchemy ]))
 
             # Formal verification (TLC)
             pkgs.jdk17_headless

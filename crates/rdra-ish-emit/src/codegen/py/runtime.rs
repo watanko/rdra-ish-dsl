@@ -1,6 +1,7 @@
 //! Runtime functions, validation, and row conversion for generated Python domains.
 
 use super::*;
+use crate::codegen::ir::CmpOp;
 
 // ── Use cases ────────────────────────────────────────────────────────────────
 
@@ -455,7 +456,34 @@ fn expr(
             field,
             op,
             value,
-        } => format!("{}.{} {} {value}", row(*r), ident(&field.wire), op.symbol()),
+        } => {
+            let value_at = format!("{}.{}", row(*r), ident(&field.wire));
+            let comparison = format!("{value_at} {} {value}", op.symbol());
+            if field.nullable && !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                format!("({value_at} is not None and {comparison})")
+            } else {
+                comparison
+            }
+        }
+        Expr::FieldCmp {
+            left,
+            left_field,
+            op,
+            right,
+            right_field,
+        } => {
+            let left_at = format!("{}.{}", row(*left), ident(&left_field.wire));
+            let right_at = format!("{}.{}", row(*right), ident(&right_field.wire));
+            let mut parts = Vec::new();
+            if left_field.nullable && !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                parts.push(format!("{left_at} is not None"));
+            }
+            if right_field.nullable && !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                parts.push(format!("{right_at} is not None"));
+            }
+            parts.push(format!("{left_at} {} {right_at}", op.symbol()));
+            format!("({})", parts.join(" and "))
+        }
         Expr::KeyEq {
             child,
             child_field,

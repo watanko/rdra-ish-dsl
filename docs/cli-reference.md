@@ -1441,7 +1441,7 @@ rdra-ish codegen <INPUTS...> --lang <LANG> [-o <FILE>] [--package <NAME>] [--all
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `<INPUTS...>` | paths (required) | — | Files and/or directories to load. |
-| `--lang` | `ts` \| `rust` \| `go` \| `py` | — (required) | Language. `typescript` is an alias of `ts`, and `python` is an alias of `py`. |
+| `--lang` | `ts` \| `rust` \| `go` \| `py` \| `py-policy` \| `py-sql-policy` \| `policy` | — (required) | Language. `typescript` is an alias of `ts`, and `python` is an alias of `py`. |
 | `-o`, `--out` | path | — (stdout) | Write to this file instead of stdout. |
 | `--package` | string | `domain` | The Go package name (`--lang go` only). |
 | `--python-config` | JSON file | — | Python representation options; only valid with `--lang py`. See below. |
@@ -1564,6 +1564,21 @@ no rule checks. It refuses a model with model errors. Two declarations that gene
 `OrderStatus` beside the inline `Enum` of `Order.status`, are an error naming both.
 
 ---
+
+### Executable decisions and adapter expressions
+
+`--lang py-policy` compiles executable `condition` bodies to typed, keyword-only Python predicates. It expands logical `@derived` fields and emits `decide_<usecase>_<column>` functions for state transitions. A disabled transition raises `ValueError`; value sets and their optional labels remain structured constants in declaration order.
+
+`--lang py-sql-policy` emits the same decisions as SQLAlchemy 2 expressions. Adapters supply columns, bind parameters, clocks, joins, transactions, and external operations. SQL `CASE` expressions return NULL if no transition is enabled; callers must retain the corresponding selection guard. The transition functions select one state-column value; adapters must execute the remaining modeled column effects. Neither mode chooses rows or executes I/O. Nullable equality treats two missing values as equal; a missing and a present value differ. Ordering with any missing operand is false. SQL output uses null-safe equality and explicit presence guards, so negation also agrees with the DSL and pure Python.
+
+```sh
+rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-policy -o decisions.py
+rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-sql-policy -o sql_decisions.py
+```
+
+`--lang policy` emits the typed semantic decision structure as JSON, including qualified references, logical derivations, guards, transitions, effects, and relation paths. It retains unsupported arithmetic derivations explicitly rather than presenting them as executable predicates.
+
+The executable modes reject conditions without a body, quantified row selection, arithmetic derivations used by a condition, recursive derivations, and transitions with different destinations from the same source state. Relation paths describe row ownership; adapters must bind the corresponding related rows. These modes do not compile arbitrary text processing or collection algorithms, guarantee scheduling/fairness, or replace concurrency control. The ordinary `check` gate still runs before generation.
 
 ## See Also
 

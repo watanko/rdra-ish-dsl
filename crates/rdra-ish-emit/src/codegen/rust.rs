@@ -1,6 +1,10 @@
 //! The Rust printer: newtype scalars and ids, fieldless enums, structs. Standard types are
 //! written by path, so a model type named `String` or `Option` shadows nothing.
 
+mod expressions;
+use expressions::expr;
+
+use super::ir;
 use super::ir::{DomainModel, FieldType, RecordKind, Scalar};
 use super::{header_lines, obligation_lines, one_line, string_literal, Options};
 
@@ -604,92 +608,6 @@ fn lit_rust(lit: &super::ir::Lit) -> String {
         super::ir::Lit::Enum { ty, value } => format!("{ty}::{}", variant_ident(&value.ident)),
         super::ir::Lit::Bool(b) => b.to_string(),
         super::ir::Lit::Int(n) => n.to_string(),
-    }
-}
-
-fn expr(
-    e: &super::ir::Expr,
-    row: &dyn Fn(usize) -> String,
-    input: &dyn Fn(usize) -> String,
-) -> String {
-    use super::ir::Expr;
-    match e {
-        Expr::True => "true".to_string(),
-        Expr::False => "false".to_string(),
-        Expr::Not(inner) => format!("!({})", expr(inner, row, input)),
-        Expr::And(items) if items.is_empty() => "true".to_string(),
-        Expr::Or(items) if items.is_empty() => "false".to_string(),
-        Expr::And(items) => items
-            .iter()
-            .map(|i| format!("({})", expr(i, row, input)))
-            .collect::<Vec<_>>()
-            .join(" && "),
-        Expr::Or(items) => items
-            .iter()
-            .map(|i| format!("({})", expr(i, row, input)))
-            .collect::<Vec<_>>()
-            .join(" || "),
-        Expr::IsNull { row: r, field } => format!("{}.{}.is_none()", row(*r), ident(&field.wire)),
-        Expr::EnumEq {
-            row: r,
-            field,
-            enum_ty,
-            value,
-        } => format!(
-            "{}.{} == {enum_ty}::{}",
-            row(*r),
-            ident(&field.wire),
-            variant_ident(&value.ident)
-        ),
-        Expr::BoolEq {
-            row: r,
-            field,
-            value,
-        } => {
-            format!("{}.{} == {value}", row(*r), ident(&field.wire))
-        }
-        Expr::IntCmp {
-            row: r,
-            field,
-            op,
-            value,
-        } => {
-            format!("{}.{} {} {value}", row(*r), ident(&field.wire), op.symbol())
-        }
-        Expr::KeyEq {
-            child,
-            child_field,
-            parent,
-            parent_field,
-        } => {
-            let c = format!("{}.{}", row(*child), ident(&child_field.wire));
-            let p = format!("{}.{}", row(*parent), ident(&parent_field.wire));
-            if child_field.nullable {
-                format!("{c}.as_ref() == ::core::option::Option::Some(&{p})")
-            } else {
-                format!("{c} == {p}")
-            }
-        }
-        Expr::Exists {
-            input: i,
-            elem,
-            body,
-        } => format!(
-            "{}.iter().any(|{}| {})",
-            input(*i),
-            row(*elem),
-            expr(body, row, input)
-        ),
-        Expr::Forall {
-            input: i,
-            elem,
-            body,
-        } => format!(
-            "{}.iter().all(|{}| {})",
-            input(*i),
-            row(*elem),
-            expr(body, row, input)
-        ),
     }
 }
 
