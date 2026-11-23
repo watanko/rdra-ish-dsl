@@ -25,7 +25,7 @@ pub(in crate::codegen) fn print_python(model: &SemanticModel, options: &Options)
     );
     out.push_str("\nfrom __future__ import annotations\n\nfrom datetime import date, datetime\nfrom decimal import Decimal\nfrom typing import Literal\n\n");
     if sql {
-        out.push_str("from sqlalchemy import and_, or_, not_, true, false, case\nfrom sqlalchemy.sql import ColumnElement, SQLColumnExpression\n\n");
+        out.push_str("from sqlalchemy import (\n    and_, or_, not_, true, false, case, cast,\n    Boolean, Date, DateTime, Integer, Numeric, String,\n)\nfrom sqlalchemy.sql import ColumnElement, SQLColumnExpression\n\n");
     }
     for (key, variation) in &model.variations {
         // Typed inputs already publish their field aliases; avoid redundant metadata copies.

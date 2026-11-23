@@ -9,6 +9,12 @@ entity Snapshot "Working data view" {
   id: Int @pk
   status: Enum(available, deleted, expired) @default(available)
   observed_at: DateTime @null
+  observed_on: Date @null
+  accepted: Bool @null
+  attempts: Int @null
+  amount: Decimal @null
+  note: String @null
+  choice: Enum(one, two) @null
 }
 
 entity Metadata "Observed storage metadata" {
@@ -44,3 +50,9 @@ sets(Observe, Snapshot.observed_at == present)
 usecase ClearObservation "Clear the stored observation timestamp"
 updates(ClearObservation, Snapshot)
 sets(ClearObservation, Snapshot.observed_at == null)
+sets(ClearObservation, Snapshot.observed_on == null)
+sets(ClearObservation, Snapshot.accepted == null)
+sets(ClearObservation, Snapshot.attempts == null)
+sets(ClearObservation, Snapshot.amount == null)
+sets(ClearObservation, Snapshot.note == null)
+sets(ClearObservation, Snapshot.choice == null)

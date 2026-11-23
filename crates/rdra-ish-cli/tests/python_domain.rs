@@ -426,7 +426,8 @@ fn column_effects_preserve_nullable_deadlines_and_supplied_timestamps() {
     python(
         &dir,
         r#"
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from itertools import product
 from typing import get_args
 from sqlalchemy import create_engine, literal, select
@@ -444,8 +445,12 @@ with create_engine('sqlite://').connect() as db:
         assert actual == expected, (deleted, expiry, actual)
     assert p.decide_observe_observed_at(new_snapshot_observed_at=now) is now
     assert db.scalar(select(s.decide_observe_observed_at(new_snapshot_observed_at=literal(now)))) == now
-    assert p.decide_clear_observation_observed_at() is None
-    assert db.scalar(select(s.decide_clear_observation_observed_at())) is None
+    types = {'observed_at': datetime, 'observed_on': date, 'accepted': bool, 'attempts': int, 'amount': Decimal, 'note': str, 'choice': str}
+    for field, expected_type in types.items():
+        assert getattr(p, f'decide_clear_observation_{field}')() is None
+        expression = getattr(s, f'decide_clear_observation_{field}')()
+        assert expression.type.python_type is expected_type, (field, expression.type)
+        assert db.scalar(select(expression)) is None
 "#,
     );
 }

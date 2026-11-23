@@ -90,6 +90,18 @@ pub(super) fn print_effects(policy: &Policy, sql: bool, out: &mut String) -> Res
                 };
                 printer.arguments.insert(name.clone(), ty);
                 name
+            } else if sql && effect.value.kind == "null" {
+                // PostgreSQL resolves a CASE of untyped NULLs to text before assignment.
+                let sql_type = match field.kind.as_str() {
+                    "integer" => "Integer",
+                    "decimal" => "Numeric",
+                    "date" => "Date",
+                    "boolean" => "Boolean",
+                    "datetime" => "DateTime",
+                    "string" | "enum" => "String",
+                    _ => return Err(unsupported(&field.kind)),
+                };
+                format!("cast(None, {sql_type})")
             } else {
                 printer.operand(&effect.value)?
             };
