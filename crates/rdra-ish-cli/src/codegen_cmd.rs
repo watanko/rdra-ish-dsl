@@ -86,7 +86,13 @@ pub fn run_codegen(
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
-            .join(" "),
+            .join(
+                if matches!(lang, CodegenLang::PyPolicy | CodegenLang::PySqlPolicy) {
+                    "\n"
+                } else {
+                    " "
+                },
+            ),
         version: env!("CARGO_PKG_VERSION").to_string(),
         check,
     };

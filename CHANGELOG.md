@@ -4,6 +4,9 @@
 
 ### Added
 
+- Python policy provenance keeps multiple input paths on separate lines, retaining
+  spaces inside each path without exceeding line-length checks by concatenating inputs.
+
 - Python and SQL policy selectors accept multiple destinations with provably disjoint
   guards. They reuse generated predicates and reject ambiguous outcomes without adding
   branch priority. Value-less `chooses` accepts non-nullable Bool invocation inputs

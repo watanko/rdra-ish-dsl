@@ -449,3 +449,53 @@ with create_engine('sqlite://').connect() as db:
 "#,
     );
 }
+
+#[test]
+fn policy_headers_preserve_separate_input_paths_with_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let inputs = [
+        "a long first directory with spaces/source_one_for_python_provenance.rdra",
+        "a long second directory with spaces/source_two_for_python_provenance.rdra",
+    ];
+    for (index, path) in inputs.iter().enumerate() {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!("dto Record{index} \"Record {index}\" {{ value: Int }}"),
+        )
+        .unwrap();
+    }
+    for (lang, file) in [
+        ("py-policy", "policy.py"),
+        ("py-sql-policy", "sql_policy.py"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+            .current_dir(dir.path())
+            .args(["codegen", inputs[0], inputs[1], "--lang", lang, "-o", file])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    python(
+        &dir,
+        r#"
+import ast
+from pathlib import Path
+paths = (
+    'a long first directory with spaces/source_one_for_python_provenance.rdra',
+    'a long second directory with spaces/source_two_for_python_provenance.rdra',
+)
+for name in ('policy.py', 'sql_policy.py'):
+    content = Path(name).read_text()
+    doc = ast.get_docstring(ast.parse(content))
+    assert doc is not None
+    assert f'Source: {paths[0]}\n{paths[1]}.' in doc
+    assert all(len(line) <= 100 for line in content.splitlines())
+"#,
+    );
+}
