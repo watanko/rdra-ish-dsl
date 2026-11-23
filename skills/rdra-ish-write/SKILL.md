@@ -163,7 +163,7 @@ kinds fail to parse, with a hint naming the replacement.
 | `performs` | `(Actor, UseCase\|Buc\|Step)` | actor performs a use case, every use case of a BUC, or a business step |
 | `contains` | `(Buc, UseCase)` / `(Buc, Flow)` / `(Flow, Step)` / `(System, Api)` / `(Screen, Field)` | composition |
 | `precedes/branches/excepts/repeats` | `(Step, Step)` | business flow order, alternatives, exceptions, loops |
-| `covers` | `(Step, UseCase\|Api\|Event\|Timer)` | business step covers model behavior |
+| `covers` | `(Step, UseCase\|Api\|Event\|Timer\|Condition\|Variation)` | business step covers model behavior |
 | `belongs` | `(Buc, Business)` | BUC ownership, optionally chained with `.by(Medium\|"text")` |
 | `reads/creates/updates/deletes` | `(UseCase\|Api, Entity)` | data touchpoint or API operation; `reads` may chain a query shape `.by(cols).order(col.desc).page(cursor\|offset)` or `.count()`/`.sum(col)`; a use case's `creates/updates/deletes` may chain `.apart()` |
 | `displays` | `(UseCase, Screen)` | UI path |
@@ -255,6 +255,8 @@ import shared.actors.{Staff as S}
 - A use case drives each state change: `transitions(CapturePay, Order.status, pending ->
   paid)`. An event only connects use cases (or a use case and an external system), so
   declare one only when something consumes it.
+- A value-less `chooses(UC, E.flag)` can receive a non-nullable Bool input;
+  `chooses(UC, E.timestamp)` also accepts a nullable or non-nullable DateTime observation.
 - Type a column by a `variation` (`method: PaymentMethod`) when an actor chooses its
   value; keep an inline `Enum(...)` for lifecycle columns and values that use cases set.
 - A `condition` is an RDRA 条件. Without a body it is a trace link; with a `holds` body

@@ -250,6 +250,15 @@ fn dto_schema(model: &SemanticModel, dto: &rdra_ish_core::model::Dto) -> Value {
 
 fn column_schema(model: &SemanticModel, col: &rdra_ish_core::model::ModelColumn) -> Value {
     let mut schema = match &col.col_type {
+        ColumnType::Record(key) => schema_ref(&model.dtos[*key].id),
+        ColumnType::List(item) | ColumnType::Tuple(item) => {
+            let mut element = col.clone();
+            element.col_type = *item.clone();
+            element.is_nullable = false;
+            element.default_val = None;
+            element.label = None;
+            json!({ "type": "array", "items": column_schema(model, &element) })
+        }
         ColumnType::Int => json!({ "type": "integer", "format": "int64" }),
         ColumnType::String => json!({ "type": "string" }),
         ColumnType::Money | ColumnType::Decimal => json!({ "type": "number", "format": "double" }),

@@ -24,7 +24,7 @@ pub use condition::{
 };
 pub(crate) use condition::{body_condition_display, effect_value_display};
 use fk::{check_join_selectors, resolve_along_links, resolve_foreign_keys};
-use instance::register_instance;
+use instance::{populate_dto_fields, register_instance};
 use predicate_process::process_predicate;
 use property::register_property;
 
@@ -54,6 +54,14 @@ pub fn build_model_items_with_scopes(
                 if (inst.kind == Kind::Variation) == variations_pass {
                     register_instance(&mut model, inst, DiagCtxt::new(*source_id), &mut diags);
                 }
+            }
+        }
+    }
+
+    for (source_id, item) in items {
+        if let Item::Instance(inst) = item {
+            if inst.kind == Kind::Dto {
+                populate_dto_fields(&mut model, inst, DiagCtxt::new(*source_id), &mut diags);
             }
         }
     }

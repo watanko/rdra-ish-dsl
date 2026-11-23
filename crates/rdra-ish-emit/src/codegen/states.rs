@@ -180,7 +180,7 @@ fn tag_states(tag: &str, values: &[String], conditions: &[EntityCondition]) -> O
 
 fn presence(value: &EffectValue) -> Option<Refined> {
     match value {
-        EffectValue::Present => Some(Refined::Present),
+        EffectValue::Present | EffectValue::Now => Some(Refined::Present),
         EffectValue::Null => Some(Refined::Null),
         _ => None,
     }

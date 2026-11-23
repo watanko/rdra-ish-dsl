@@ -86,6 +86,10 @@ pub(crate) fn parse_effect_value(
         });
     }
 
+    if lit == "now" && col.col_type == ColumnType::DateTime {
+        return Ok(EffectValue::Now);
+    }
+
     match &col.col_type {
         ColumnType::Enum(variants) => {
             if variants.iter().any(|v| v == lit) {
@@ -296,6 +300,7 @@ mod tests {
             is_indexed: false,
             is_nullable: false,
             default_val: None,
+            default_quoted: false,
             label: None,
             check_constraints: Vec::new(),
             is_soft_delete: false,

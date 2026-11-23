@@ -217,7 +217,7 @@ qualify the argument with a kind prefix — see [Kind-Qualified References](#kin
 | `branches` | `(Step, Step)` | The first step may branch to the second as an alternate path. |
 | `excepts` | `(Step, Step)` | The first step may route to the second as an exception path. |
 | `repeats` | `(Step, Step)` | The first step may loop back to the second. |
-| `covers` | `(Step, UseCase \| Api \| Event \| Timer)` | The business step covers the referenced use case, API, event, or timer. Use this to make UC ordering and event chains explicit in the DSL while keeping the step vocabulary business-facing. |
+| `covers` | `(Step, UseCase \| Api \| Event \| Timer \| Condition \| Variation)` | The business step covers a use case, API, event, timer, evaluated condition, or choice variation. Use this to make UC ordering and event chains explicit in the DSL while keeping the step vocabulary business-facing. |
 | `compensates` | `(UseCase, UseCase)` | The first use case compensates for or rolls back the business effect of the second. Use this for alternative or exception flow review without forcing compensation into CRUD/state derivation. |
 | `coordinates` | `(UseCase, Entity, Entity)` | The use case coordinates consistency for a relation crossing system boundaries. The use case must invoke APIs on both system sides that operate the corresponding entities. |
 | `belongs` | `(Buc, Business)` | The BUC belongs to the business. |
@@ -230,9 +230,9 @@ qualify the argument with a kind prefix — see [Kind-Qualified References](#kin
 | `relate` | `(Entity, Entity, Card)` | Declares an ER relationship and auto-generates the FK columns. `Card` is one of `1:1`, `1:N`, `N:1`, `N:M` (unquoted). The child side, the `N` of `N:1` / `1:N` or the left of `1:1`, may be a range `lo..hi` with `lo` 0 or 1 and `hi` 1 or `*`: `relate(OrderLine, Order, 1..*:1)` says every `Order` has at least one `OrderLine`, and the lifecycle checks it as the invariant `MinCard_<Child>_<role>`. A range on the parent side is an error; write `.optional()` for a parent that may be absent. For `N:M`, require `.via(JunctionEntity)` where the junction is distinct from both ends: the model keeps the logical N:M edge **and synthesizes** two `N:1` edges `Junction→A` / `Junction→B` (FK columns, composite unique on the FK pair when missing, TLA owner links, ER crowfoot, `.along` paths). Equivalent manual form: two explicit `N:1` relates from the junction. For `1:1` the left end is the child: it holds the key column, marked unique. FK options can be chained with `.optional()`, `.on_delete(action)`, and `.on_update(action)` (for `N:M`, options apply to both generated FKs). An `.optional()` relate lets the child exist unlinked in `states` and in the TLA+ export; a mandatory relate does not. |
 | `transitions` | `(UseCase, Entity.column, from -> to)` | A lifecycle edge on an Enum column: the use case moves the entity from the first variant to the second. `.when(Condition)` guards this arm only. See [Guard one arm](#guard-one-arm-when). |
 | `after` | `(UseCase).assert(...)` | A temporal anchor assertion: a predicate on the state that each run of the use case leaves, read after its last step on the run's rows. |
-| `sets` | `(UseCase, Entity.column == value)` | An explicit column effect, read by state derivation. Use `present` (not PostgreSQL type names) for nullable non-null. `Entity.column == Source.column` copies a value. `.when(Condition)` on a literal leaves the value only while the condition holds; see [A value that follows a condition](#a-value-that-follows-a-condition-when). |
+| `sets` | `(UseCase, Entity.column == value)` | An explicit column effect, read by state derivation. Use `present` (not PostgreSQL type names) for nullable non-null. `DateTime == now` copies the current clock; `Entity.column == Source.column` copies a value. Guard a clock copy with `applies_to`, as for a column copy. `.when(Condition)` on a literal leaves the value only while the condition holds; see [A value that follows a condition](#a-value-that-follows-a-condition-when). |
 | `drives` | `(UseCase, Entity.column op rhs, true \| false)` | Drives the truth value of a comparison proposition (a derived Bool axis) in state derivation. |
-| `chooses` | `(UseCase, Entity.column)` | The actor picks the value of a variation-typed column again when the use case runs: any value of the variation may follow, as on a creation. See [Choosing a value again](#choosing-a-value-again-chooses). |
+| `chooses` | `(UseCase, Entity.column)` | The actor picks the value of a variation-typed or Bool column again when the use case runs: any value of the variation may follow, as on a creation. See [Choosing a value again](#choosing-a-value-again-chooses). |
 | `chooses` | `(UseCase, Entity.column, value)` | One value the actor may pick; the lines of one use case and column list the choice. `.when(Condition)` guards this value only. See [Guard one value](#guard-one-value-when). |
 | `links`, `relinks`, `unlinks` | `(UseCase, Entity, Entity)` | The use case links an unlinked child row to a parent, moves a linked child to another parent, or unlinks it, through the key from the first entity to the second. See [Linking, moving and unlinking](#linking-moving-and-unlinking-an-existing-child-links-relinks-unlinks). |
 
@@ -591,6 +591,10 @@ repeats(PaymentFailed, ReviewCart)
 covers(AuthorizePayment, CapturePayment)
 covers(PaymentFailed, PaymentRejected)
 ```
+
+A business step may also `covers(Step, Variation)` for a choice, or `covers(Step, Condition)` to identify the existing condition
+it evaluates. This is traceability, not an execution guard: it does not apply the
+condition to a use case or change lifecycle behavior.
 
 Use `precedes` for the main path, `branches` for alternatives, `excepts` for error
 or exception routes, and `repeats` for loops. `covers` is intentionally separate
@@ -1201,6 +1205,8 @@ entity AuditLog "Audit log"
 | `Decimal` | Decimal number. `Decimal(p, s)` stores `p` digits, `s` of them after the point. |
 | `Enum(a, b, c)` | Inline value set. An Enum column is a **state axis** and can be linked to a state machine. Use it for a lifecycle column or a value that use cases set. Each value may carry a label, as a variation value does: `Enum(pending "受付前", paid "支払済")`. Diagrams draw a state by its label, and the `states` table lists the labels under its axes. `lint` `enum-attribute` warns on an inline Enum that no `transitions` and no `sets` moves, because an actor chooses its value: type it by a variation. |
 | `<VariationId>` | A [variation](#variations) in type position, such as `method: PaymentMethod`. The column holds one of the variation's values. It is an **attribute**: not a state axis, never a lifecycle column. An id that names no variation is `UnknownColumnType`. |
+| `<DtoId>` | Embedded DTO value, allowed in DTO fields only. References resolve through the same imports as variations, including forward declarations. |
+| `List(T)` / `Tuple(T)` | Ordered collection in a DTO field. `T` is a scalar, variation, or DTO. Python preserves list versus tuple; OpenAPI and JSON Schema export arrays with typed items. |
 
 A type's arguments say what the schema stores: `export --kind sql`, `dbml`, and `json-schema`
 print them (`VARCHAR(255)`, `NUMERIC(10, 2)`, `TIMESTAMP`, `maxLength`). `check`, `states`,
@@ -1208,6 +1214,15 @@ and `verify` do not read them: an `Int` or `Decimal` column compared in a rule r
 `0..--int-range-max` whatever its precision. Another type with arguments, a length or a
 precision that is not a positive number, a scale above the precision, or a `DateTime`
 argument other than `tz` and `local` is `InvalidTypeArgs`.
+
+DTO collections may use `@default(empty)`, which creates a distinct list or an empty
+tuple per constructor. A nullable field may use `@default(null)`; this is distinct
+from a quoted text default `@default("null")`. Embedded objects are contract values,
+not foreign keys: entity columns continue to use `relate` for persistent structure.
+
+Variation wire values that cannot be written as identifiers may be quoted, for example
+`variation Model "Model" { "model-3.1" "model-3.8" }`. Identifier values still use bare
+syntax (`cash`, not `"cash"`), preserving the existing quoted-value diagnostics.
 
 #### Column annotations
 
@@ -1305,6 +1320,12 @@ What a variation column does differently from an inline `Enum`:
 | ER diagram, `csv --kind entity`, `list --kind entity` | Type `Enum` | Type is the variation id |
 
 #### Choosing a value again: `chooses`
+
+A value-less `chooses(UseCase, Entity.flag)` also accepts a Bool column, for a
+non-nullable Bool input. Value-less choices also accept DateTime observations, including
+nullable timestamps; explicit third-argument choices remain variation-only. It can model invocation input separately from
+persisted entity state. Listed choices with a third argument still require a variation.
+
 
 A created instance takes any value of a variation column, unless the creating use case
 `sets` it: the actor picks it. An update keeps the value. When a use case lets the actor

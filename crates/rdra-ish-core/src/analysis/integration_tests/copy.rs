@@ -175,3 +175,29 @@ fn a_copy_and_a_choice_of_one_column_conflict() {
         "{errors:?}"
     );
 }
+
+#[test]
+fn a_datetime_effect_can_copy_the_clock_and_other_types_reject_it() {
+    let (model, errors) = build("sets(U, Child.due == now)");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        model.column_effects.last().unwrap().value,
+        SetValue::Value(EffectValue::Now)
+    );
+    for column in ["on", "count", "name"] {
+        let (_, errors) = build(&format!("sets(U, Child.{column} == now)"));
+        assert!(
+            !errors.is_empty(),
+            "{column}: now is not a value of this type"
+        );
+    }
+    let (_, errors) = build(
+        "condition Enabled \"Enabled\"\nholds(Enabled, Child.on == true)\nsets(U, Child.due == now).when(Enabled)",
+    );
+    assert!(
+        errors.iter().any(
+            |error| matches!(error, RdraError::SetsWhenOnCopy { copied, .. } if copied == "now")
+        ),
+        "{errors:?}"
+    );
+}

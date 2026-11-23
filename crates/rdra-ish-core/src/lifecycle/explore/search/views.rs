@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::lifecycle::types::ActId;
 
-use super::EntityView;
+use super::super::EntityView;
 
 impl EntityView {
     pub(crate) fn id(&self, key: &[u8]) -> Option<usize> {

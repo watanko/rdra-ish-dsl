@@ -99,7 +99,6 @@ pub(in crate::codegen) fn expr(
     })
 }
 
-/// The row `at` names: a function row by `bind`, or the row of an enclosing quantifier.
 pub(super) fn resolve<'d>(
     at: At,
     rows: &[RowParam],
@@ -171,6 +170,77 @@ pub(super) fn atom(
         TsCmp::Ne => Ok(Expr::Not(Box::new(e))),
         _ => Err(unsupported()),
     };
+    if matches!(domain, Domain::NullableInt) && matches!(rhs, Term::Lit(Value::NULL)) {
+        let is_null = match row.fields.iter().find(|f| f.wire == *column) {
+            None if row.always_null.contains(column) => Expr::True,
+            Some(field) if !field.nullable => Expr::False,
+            Some(field) => Expr::IsNull {
+                row: r,
+                field: field.clone(),
+            },
+            None => return Err(unsupported()),
+        };
+        return negate(is_null);
+    }
+    if let (
+        Domain::Int | Domain::NullableInt,
+        Term::Slot {
+            var: right,
+            at: right_at,
+        },
+    ) = (domain, rhs)
+    {
+        let VarKind::Column {
+            column: right_column,
+            ..
+        } = &ts.var(*right).kind
+        else {
+            return Err(unsupported());
+        };
+        let (right, _, right_row) =
+            resolve(*right_at, rows, bind, quant_ref).ok_or_else(unsupported)?;
+        let left_field = row.fields.iter().find(|field| field.wire == *column);
+        let right_field = right_row
+            .fields
+            .iter()
+            .find(|field| field.wire == *right_column);
+        let (Some(left_field), Some(right_field)) = (left_field, right_field) else {
+            if left_field.is_none() && !row.always_null.contains(column)
+                || right_field.is_none() && !right_row.always_null.contains(right_column)
+            {
+                return Err(unsupported());
+            }
+            let equal = match (left_field, right_field) {
+                (None, None) => Expr::True,
+                (Some(field), None) if field.nullable => Expr::IsNull {
+                    row: r,
+                    field: field.clone(),
+                },
+                (None, Some(field)) if field.nullable => Expr::IsNull {
+                    row: right,
+                    field: field.clone(),
+                },
+                _ => Expr::False,
+            };
+            return match op {
+                TsCmp::Eq => Ok(equal),
+                TsCmp::Ne => Ok(Expr::Not(Box::new(equal))),
+                _ => Ok(Expr::False),
+            };
+        };
+        if left_field.ty != FieldType::Scalar(crate::codegen::ir::Scalar::Int)
+            || right_field.ty != left_field.ty
+        {
+            return Err("a comparison between columns that are not plain Int values".into());
+        }
+        return Ok(Expr::FieldCmp {
+            left: r,
+            left_field: left_field.clone(),
+            op: comparison_operator(op),
+            right,
+            right_field: right_field.clone(),
+        });
+    }
     match (domain, rhs) {
         (Domain::Enum(values), Term::Lit(v)) => {
             let wire = values.get(usize::from(v.0)).ok_or_else(unsupported)?;
@@ -235,13 +305,13 @@ pub(super) fn atom(
             };
             negate(e)
         }
-        (Domain::Int, Term::Int(_) | Term::Lit(_)) => {
+        (Domain::Int | Domain::NullableInt, Term::Int(_) | Term::Lit(_)) => {
             let field = row
                 .fields
                 .iter()
                 .find(|f| f.wire == *column)
                 .ok_or_else(unsupported)?;
-            if field.ty != FieldType::Scalar(crate::codegen::ir::Scalar::Int) || field.nullable {
+            if field.ty != FieldType::Scalar(crate::codegen::ir::Scalar::Int) {
                 return Err("a comparison on a column that is not a plain Int".into());
             }
             let value = match rhs {
@@ -265,6 +335,17 @@ pub(super) fn atom(
             })
         }
         _ => Err(unsupported()),
+    }
+}
+
+fn comparison_operator(op: TsCmp) -> CmpOp {
+    match op {
+        TsCmp::Eq => CmpOp::Eq,
+        TsCmp::Ne => CmpOp::Ne,
+        TsCmp::Lt => CmpOp::Lt,
+        TsCmp::Le => CmpOp::Le,
+        TsCmp::Gt => CmpOp::Gt,
+        TsCmp::Ge => CmpOp::Ge,
     }
 }
 

@@ -15,7 +15,8 @@ use crate::lifecycle::view::pattern_bound;
 use crate::lifecycle::TransitionSystem;
 use crate::parallel::Helpers;
 
-use super::{Bfs, Bindings, Caps, Edge, EntityView, Moves, Reach, Threads};
+use super::super::{Bfs, Bindings, Caps, Edge, EntityView, Moves, Reach, Threads};
+use super::BirthHistory;
 
 /// States one worker expands at a time. Fewer than two chunks of waiting states are
 /// expanded on the caller's thread, so a small run starts no worker.
@@ -163,10 +164,15 @@ impl Bindings {
 }
 
 impl<'t> Bfs<'t> {
-    pub(super) fn new(ts: &'t TransitionSystem, caps: Caps) -> Self {
+    pub(in crate::lifecycle::explore) fn new(
+        ts: &'t TransitionSystem,
+        caps: Caps,
+        history: BirthHistory,
+    ) -> Self {
         Bfs {
             ts,
             caps,
+            history,
             states: Vec::new(),
             seen: FastMap::default(),
             keys: Default::default(),
@@ -182,7 +188,7 @@ impl<'t> Bfs<'t> {
     }
 
     /// Explores with `threads` workers; the run is the same with any number.
-    pub(super) fn go(&mut self, threads: Threads) {
+    pub(in crate::lifecycle::explore) fn go(&mut self, threads: Threads) {
         let ts = self.ts;
         for s in ts.initial_states() {
             for (i, _) in ts.entities.iter().enumerate() {
@@ -262,7 +268,7 @@ impl<'t> Bfs<'t> {
                 continue;
             }
             self.check_after(from, act, params, s2);
-            let to = match self.seen.get(&*s2) {
+            let to = match self.seen.get(self.history.key(s2).as_ref()) {
                 Some(&to) => to,
                 None => {
                     let to = self.states.len() as u32;
@@ -280,7 +286,8 @@ impl<'t> Bfs<'t> {
     /// Adds a new state; false when the state cap stops the run. `parent` is the index in
     /// `edges` that the edge reaching it takes.
     fn admit(&mut self, s: State, parent: Option<u32>) -> bool {
-        if self.seen.contains_key(&s) {
+        let key = self.history.key(&s);
+        if self.seen.contains_key(key.as_ref()) {
             return true;
         }
         if self.states.len() >= self.caps.states {
@@ -296,7 +303,7 @@ impl<'t> Bfs<'t> {
             return false;
         }
         self.check_invariants(&s, self.states.len() as u32);
-        self.seen.insert(s.clone(), self.states.len() as u32);
+        self.seen.insert(key.into_owned(), self.states.len() as u32);
         self.states.push(s);
         self.parents.push(parent);
         true

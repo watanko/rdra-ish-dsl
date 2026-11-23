@@ -18,7 +18,25 @@ pub fn run_codegen(
     out: Option<&Path>,
     package: &str,
     allow_failing: bool,
+    python_config: Option<&Path>,
 ) -> Result<()> {
+    let python = match python_config {
+        Some(path) => {
+            if !matches!(lang, CodegenLang::Python) {
+                anyhow::bail!("--python-config requires --lang py");
+            }
+            serde_json::from_slice(
+                &fs::read(path).with_context(|| format!("failed to read {}", path.display()))?,
+            )
+            .with_context(|| {
+                format!(
+                    "invalid Python representation options in {}",
+                    path.display()
+                )
+            })?
+        }
+        None => Default::default(),
+    };
     let (program, model) = load_clean(inputs)?;
     // The state types rest on the rules `check` verifies, so the generator runs it first.
     let found = state_findings(&program, &model, &Scope::ALL, Bounds::STATES, Caps::STATES);
@@ -53,18 +71,28 @@ pub fn run_codegen(
         );
     };
     let options = Options {
+        python,
         lang: match lang {
             CodegenLang::Ts => Lang::TypeScript,
             CodegenLang::Rust => Lang::Rust,
             CodegenLang::Go => Lang::Go,
             CodegenLang::Python => Lang::Python,
+            CodegenLang::Policy => Lang::Policy,
+            CodegenLang::PyPolicy => Lang::PythonPolicy,
+            CodegenLang::PySqlPolicy => Lang::PythonSqlPolicy,
         },
         package: package.to_string(),
         model_path: inputs
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
-            .join(" "),
+            .join(
+                if matches!(lang, CodegenLang::PyPolicy | CodegenLang::PySqlPolicy) {
+                    "\n"
+                } else {
+                    " "
+                },
+            ),
         version: env!("CARGO_PKG_VERSION").to_string(),
         check,
     };

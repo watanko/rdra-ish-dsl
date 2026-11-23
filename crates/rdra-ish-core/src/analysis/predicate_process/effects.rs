@@ -236,6 +236,19 @@ fn record_sets_effect(
         return false;
     };
     match &value {
+        SetValue::Value(EffectValue::Now) if guard.is_some() => {
+            push_error(
+                ctx,
+                diags,
+                pred.span.clone(),
+                RdraError::SetsWhenOnCopy {
+                    usecase: model.use_cases[origin].id.clone(),
+                    column: format!("{entity_id}.{column}"),
+                    copied: "now".to_string(),
+                },
+            );
+            return true;
+        }
         SetValue::Value(_) => {
             crate::analysis::constraint::report_leading_by(&pred.chain, ctx, diags)
         }

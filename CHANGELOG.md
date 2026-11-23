@@ -4,6 +4,28 @@
 
 ### Added
 
+- Python policy provenance keeps multiple input paths on separate lines, retaining
+  spaces inside each path without exceeding line-length checks by concatenating inputs.
+
+- Python and SQL policy selectors accept multiple destinations with provably disjoint
+  guards. They reuse generated predicates and reject ambiguous outcomes without adding
+  branch priority. Value-less `chooses` accepts non-nullable Bool invocation inputs
+  and nullable or non-nullable DateTime observations.
+- Python and SQL policies compile `sets` effects, including supplied timestamps, nulls,
+  literals, and bound-column copies. Enum fields publish Literal aliases for typed
+  consumers; adapters retain concrete clocks, external identifiers, and writes.
+
+- Business steps can cover existing conditions and variations. These are traceability
+  references, not implicit execution guards. Policy JSON now exports declared flows,
+  performers, covered references, and ordering edges, including cross-flow hand-offs.
+  A condition covered by a step in a BUC-owned flow has a business anchor for lint.
+
+- DTO fields support embedded DTOs, `List(T)`, and `Tuple(T)` with typed schema exports.
+  Wire values that need punctuation may be quoted without relaxing bare identifier syntax.
+- Experimental Python code generation preserves declared constructor defaults and supports
+  explicit mutable/slotted dataclasses, Literal value sets, and opt-in Pydantic records
+  through `--python-config`. Record names and option keys are validated.
+
 - insurance-claim-ops states 「賠償責任の事故は示談交渉の前に請求を完了しない」 as a
   `.lemma()`, so `verify --prove` proves every state rule of every domain sample. The docs
   and the `rdra-ish-verify` skill show how to find a lemma behind a CTI that turns on a
@@ -48,6 +70,11 @@
   columns it compares with `==`; the hint offers `.along(...)` when a related row is meant.
   The food-permit and insurance-claim samples declare `@index` on
   the state columns their timers sweep.
+
+### Fixed
+
+- Python code generation keeps every line and the indentation of multi-line model
+  descriptions instead of silently discarding everything after the first line.
 
 ### Changed
 
@@ -275,7 +302,7 @@ BFS of a reduced cone.
 
 ### Fixed
 
-- The BFS of a reduced cone no longer panics (`index out of bounds` in `explore/bfs.rs`)
+- The BFS of a reduced cone no longer panics (`index out of bounds` in `explore/search/bfs.rs`)
   on a class move of an S action whose T params the extended sub-lifecycle dropped, such
   as a use case that updates a row of the sub-lifecycle and a related row outside it. A
   class move now carries its params in the cone action's numbering, and a lifted trace

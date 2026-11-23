@@ -51,6 +51,11 @@ impl LabelledEdges {
 }
 
 impl ComponentRun {
+    /// Columns omitted from state identity after proving they are read only on creation.
+    pub fn birth_history_columns(&self) -> usize {
+        self.history.len()
+    }
+
     pub fn edges(&self) -> &[Edge] {
         &self.edges
     }
@@ -110,6 +115,18 @@ impl ComponentRun {
 
     /// The path to `states[at]`, then `extra`, lifted and in model terms, with its last state.
     fn lifted_trace(&self, at: u32, extra: Option<Step>) -> (Trace, State) {
+        let (start, steps) = self.lifted_path(at, extra);
+        (
+            self.system.trace_from(&start, &steps),
+            steps.last().map_or(start, |s| s.2.clone()),
+        )
+    }
+
+    pub(in crate::lifecycle::explore) fn lifted_path(
+        &self,
+        at: u32,
+        extra: Option<Step>,
+    ) -> (State, Vec<Step>) {
         let path = self.path_to(at);
         let first = path.first().map_or(at, |e| e.from);
         let mut steps: Vec<Step> = path
@@ -121,10 +138,8 @@ impl ComponentRun {
             .collect();
         steps.extend(extra);
         let ts = &self.system;
-        let (start, steps) = ts.lifted(&self.states[first as usize], &steps);
-        (
-            ts.trace_from(&start, &steps),
-            steps.last().map_or(start, |s| s.2.clone()),
-        )
+        let start = &self.states[first as usize];
+        let steps = self.history.lift(ts, start, &steps);
+        ts.lifted(start, &steps)
     }
 }

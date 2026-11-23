@@ -59,6 +59,22 @@ fn resolve_binding(
     }
 }
 
+/// Resolve an embedded DTO through the same module boundaries as predicate references.
+pub(crate) fn resolve_dto(model: &SemanticModel, name: &str, ctx: DiagCtxt) -> Option<DtoKey> {
+    let mut found = None;
+    for binding in model
+        .import_scopes
+        .resolve_flat_bindings(ctx.source_id, name)
+    {
+        if let Some(NodeRef::Dto(key)) = resolve_binding(model, &binding, Some(&Kind::Dto)) {
+            if found.replace(key).is_some() {
+                return None;
+            }
+        }
+    }
+    found
+}
+
 /// Resolve a bare name to a `variation` visible from `ctx`, without reporting.
 pub(crate) fn resolve_variation(
     model: &SemanticModel,

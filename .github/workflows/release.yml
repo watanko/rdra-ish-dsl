@@ -51,8 +51,12 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
+      - uses: astral-sh/setup-uv@eb1897b8dc4b5d5bfe39a428a8f2304605e0983c # v7.0.0
+
       - name: Test
-        run: cargo test --workspace --locked
+        env:
+          RDRA_TEST_PYTHON: python
+        run: uv run --isolated --no-project --python 3.13 --with pydantic==2.13.4 --with sqlalchemy==2.0.49 cargo test --workspace --locked
 
       - name: Build
         run: cargo build --release --locked --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}

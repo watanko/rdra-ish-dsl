@@ -34,6 +34,9 @@ pub(crate) fn lifecycle_start_states(
 /// Type name shown in ER diagrams and CSV: scalar names, `Enum`, or the variation's id.
 pub(crate) fn col_type_str(model: &SemanticModel, ct: &ColumnType) -> String {
     match ct {
+        ColumnType::Record(key) => model.dtos[*key].id.clone(),
+        ColumnType::List(_) => "List".to_string(),
+        ColumnType::Tuple(_) => "Tuple".to_string(),
         ColumnType::Int => "Int".to_string(),
         ColumnType::String => "String".to_string(),
         ColumnType::Money => "Money".to_string(),
@@ -362,7 +365,7 @@ pub const EDGE_RELATIONS: &[EdgeRelation] = &[
     rel(
         Diagram::Rdra,
         &["step"],
-        &["usecase", "api", "event", "timer"],
+        &["usecase", "api", "event", "timer", "condition", "variation"],
         "covers",
         Name,
     ),
@@ -594,7 +597,7 @@ pub const EDGE_RELATIONS: &[EdgeRelation] = &[
     rel(
         Diagram::Flow,
         &["step"],
-        &["usecase", "api", "event", "timer"],
+        &["usecase", "api", "event", "timer", "condition", "variation"],
         "covers",
         Name,
     ),

@@ -152,7 +152,9 @@ fn python_builds() {
         let dir = scratch("py", &sample);
         let path = generate(&sample, "py", &dir, "domain.py");
         run(
-            Command::new("python3").args(["-m", "py_compile"]).arg(&path),
+            Command::new("python3")
+                .args(["-m", "py_compile"])
+                .arg(&path),
             &format!("py_compile on the codegen of {sample}"),
         );
         run(

@@ -8,6 +8,7 @@ use crate::diagram_common::{
 };
 use crate::{collect_object_graph_nodes, EmitError, Emitter, Scope, View};
 use rdra_ish_core::analysis::{chosen_variation, condition_body_display, condition_edges};
+use rdra_ish_core::entity_lifecycle::value_id_component;
 use rdra_ish_core::model::{
     CombinesTarget, EnumValue, NodeRef, RelKind, SemanticModel, VariationKey,
 };
@@ -41,7 +42,7 @@ fn render_variation(out: &mut String, model: &SemanticModel, key: VariationKey, 
         let label = label.as_deref().unwrap_or(value);
         out.push_str(&node_line(
             "    ",
-            &format!("{id}__{value}"),
+            &format!("{id}__{}", value_id_component(value)),
             &quote(label),
             "value",
         ));

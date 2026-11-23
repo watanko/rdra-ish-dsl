@@ -1,0 +1,6 @@
+{
+  "mutable_records": ["ChecklistItem", "Checklist"],
+  "pydantic_records": ["Settings"],
+  "slots": true,
+  "literal_value_sets": true
+}

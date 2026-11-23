@@ -108,7 +108,7 @@ pub(crate) fn run_export(
 
 /// `-o X.tla`: the directory the file sits in (`.` for a bare name) and its module name `X`.
 pub(crate) fn tla_file(out: &Path) -> Option<(PathBuf, String)> {
-    if !out.extension().is_some_and(|e| e == "tla") {
+    if out.extension().is_none_or(|e| e != "tla") {
         return None;
     }
     let stem = out

@@ -1485,7 +1485,7 @@ carries a `witness`: a shortest path to the first state that holds it, as `start
 
 ## `codegen` (experimental)
 
-Print the model's domain types as TypeScript, Rust, or Go code for an agent to finish.
+Print the model's domain types as TypeScript, Rust, Go, or Python code for an agent to finish.
 This subcommand is an experimental extra: neither it, its flags, its exit status, nor the
 code it prints is covered by [compatibility](./compatibility.md), and any release may
 change or remove them. [The design](./design/algebraic-codegen.md) describes where it is
@@ -1498,10 +1498,38 @@ rdra-ish codegen <INPUTS...> --lang <LANG> [-o <FILE>] [--package <NAME>] [--all
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `<INPUTS...>` | paths (required) | — | Files and/or directories to load. |
-| `--lang` | `ts` \| `rust` \| `go` \| `py` | — (required) | Language. `typescript` is an alias of `ts`, and `python` is an alias of `py`. |
+| `--lang` | `ts` \| `rust` \| `go` \| `py` \| `py-policy` \| `py-sql-policy` \| `policy` | — (required) | Language. `typescript` is an alias of `ts`, and `python` is an alias of `py`. |
 | `-o`, `--out` | path | — (stdout) | Write to this file instead of stdout. |
 | `--package` | string | `domain` | The Go package name (`--lang go` only). |
+| `--python-config` | JSON file | — | Python representation options; only valid with `--lang py`. See below. |
 | `--allow-failing` | flag | off | Generate even when `check` reports errors. The state types then narrow no column, and each error is listed as an obligation the model does not meet. |
+
+Python configuration keeps representation choices separate from domain values:
+
+```json
+{
+  "mutable_records": ["ChecklistItem", "Checklist"],
+  "pydantic_records": ["Settings"],
+  "slots": true,
+  "literal_value_sets": true,
+  "enum_value_sets": ["ErrorCategory"],
+  "str_enum": true
+}
+```
+
+Records are frozen dataclasses by default. `mutable_records` selects editable records;
+`slots` applies to dataclasses. `pydantic_records` opts named records into Pydantic 2
+models with forbidden extra fields and the selected mutability. Pydantic is a dependency
+of the importing application, not of the compiler or default output. Unknown option keys
+and unknown record names fail generation.
+
+`literal_value_sets` emits Python `Literal` aliases for value sets other than lifecycle
+tags. `enum_value_sets` retains named enums when attributes need their members.
+`str_enum` uses Python 3.11+ `StrEnum`; otherwise enums retain the default Python 3.10
+representation. Constructor defaults are read from `@default`, including nullable `null`
+and collection `empty`; lists use factories rather than shared mutable defaults. When a
+default precedes a required dataclass field, its constructor uses keyword-only arguments.
+See [the executable sample](../samples/python-domain/README.md).
 
 The output is one compilation unit: a TypeScript module, a Rust module file, or a Go file.
 It opens with a header and the numbered **obligations**: what `check` and `verify` assume of
@@ -1593,6 +1621,35 @@ no rule checks. It refuses a model with model errors. Two declarations that gene
 `OrderStatus` beside the inline `Enum` of `Order.status`, are an error naming both.
 
 ---
+
+### Executable decisions and adapter expressions
+
+`--lang py-policy` compiles executable `condition` bodies to typed, keyword-only Python predicates. It expands logical `@derived` fields and emits `decide_<usecase>_<column>` functions for state transitions and `sets` column effects. A disabled selection raises `ValueError`; value sets and their optional labels remain structured constants in declaration order. Enum fields also publish Literal type aliases for consumers of computed states.
+
+Python policy state selectors accept multiple destinations from one source only when
+their guards are provably disjoint, including complementary comparisons and Boolean
+derivations. Ambiguous destinations are rejected rather than assigned branch priority.
+The selectors call the generated predicates, so each guard has one executable definition.
+
+An unlabeled variation used as an entity input type is represented by its field's
+Literal alias. Standalone variations and labeled variations additionally publish
+their value sets and optional label maps; typed inputs do not duplicate unlabeled
+runtime metadata. The `policy` JSON output retains every variation in either case.
+
+`--lang py-sql-policy` emits the same decisions as SQLAlchemy 2 expressions. Adapters supply columns, bind parameters, clocks, joins, transactions, and external operations. SQL `CASE` expressions return NULL if no transition or column effect is enabled; callers must retain the corresponding selection guard. Each selector returns one column value; adapters execute the modeled writes together within the declared transaction. A `present` effect receives a typed `new_<entity>_<column>` value from the adapter, keeping concrete timestamps and external identifiers outside the decision. `null`, literal, and bound-column copy effects compile directly. Abstract integer clock marks cannot supply concrete dates and are rejected by the executable modes. Neither mode chooses rows or executes I/O. Nullable equality treats two missing values as equal; a missing and a present value differ. Ordering with any missing operand is false. SQL output uses null-safe equality and explicit presence guards, so negation also agrees with the DSL and pure Python.
+
+```sh
+rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-policy -o decisions.py
+rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-sql-policy -o sql_decisions.py
+```
+
+`--lang policy` emits the typed semantic decision structure as JSON, including qualified references, logical derivations, guards, transitions, effects, and relation paths. It retains unsupported arithmetic derivations explicitly rather than presenting them as executable predicates.
+
+The executable modes reject conditions without a body, quantified row selection, arithmetic derivations used by a condition, recursive derivations, and overlapping transition or effect outcomes whose guards cannot be proved disjoint. Relation paths describe row ownership; adapters must bind the corresponding related rows. These modes do not compile arbitrary text processing or collection algorithms, guarantee scheduling/fairness, or replace concurrency control. The ordinary `check` gate still runs before generation.
+
+The experimental `codegen --lang policy` output also includes `flows`: each flow
+contains its BUC IDs, steps, typed covered targets, performers, and declared ordering
+links. Consumers can audit diagram coverage without parsing labels or Mermaid text.
 
 ## See Also
 

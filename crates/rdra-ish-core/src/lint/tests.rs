@@ -2,6 +2,36 @@ use super::*;
 use crate::build_model;
 use rdra_ish_syntax::parse;
 
+#[test]
+fn only_a_step_in_a_buc_flow_anchors_the_condition_it_evaluates() {
+    let model = model_from(
+        r#"
+entity InputFacts "Input facts" { present: Bool }
+condition Anchored "Anchored"
+holds(Anchored, InputFacts.present == true)
+condition Detached "Detached"
+holds(Detached, InputFacts.present == true)
+condition Uncovered "Uncovered"
+holds(Uncovered, InputFacts.present == true)
+buc ReviewInput "Review input"
+flow ReviewFlow "Review flow"
+contains(ReviewInput, ReviewFlow)
+step InspectInput "Inspect input"
+contains(ReviewFlow, InspectInput)
+covers(InspectInput, Anchored)
+step DetachedStep "Detached step"
+covers(DetachedStep, Detached)
+"#,
+    );
+    let mut unanchored: Vec<_> = collect_findings(&model)
+        .into_iter()
+        .filter(|finding| finding.rule == "condition-no-rdra-anchor")
+        .map(|finding| finding.subject_id)
+        .collect();
+    unanchored.sort();
+    assert_eq!(unanchored, ["Detached", "Uncovered"]);
+}
+
 fn model_from(src: &str) -> SemanticModel {
     let (ast, parse_errors) = parse(src);
     assert!(parse_errors.is_empty(), "parse errors: {parse_errors:?}");

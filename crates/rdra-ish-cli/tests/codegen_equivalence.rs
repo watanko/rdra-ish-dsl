@@ -210,14 +210,45 @@ impl Rows<'_> {
                 value,
             } => {
                 let (var, v) = self.get(*row, &field.wire)?;
-                let n = self.ts.var(var).domain.number(v)?;
-                match op {
-                    CmpOp::Eq => n == *value,
-                    CmpOp::Ne => n != *value,
-                    CmpOp::Lt => n < *value,
-                    CmpOp::Le => n <= *value,
-                    CmpOp::Gt => n > *value,
-                    CmpOp::Ge => n >= *value,
+                match (self.ts.var(var).domain.number(v), op) {
+                    (None, CmpOp::Ne) => true,
+                    (None, _) => false,
+                    (Some(n), _) => match op {
+                        CmpOp::Eq => n == *value,
+                        CmpOp::Ne => n != *value,
+                        CmpOp::Lt => n < *value,
+                        CmpOp::Le => n <= *value,
+                        CmpOp::Gt => n > *value,
+                        CmpOp::Ge => n >= *value,
+                    },
+                }
+            }
+            Expr::FieldCmp {
+                left,
+                left_field,
+                op,
+                right,
+                right_field,
+            } => {
+                let (left_var, left_value) = self.get(*left, &left_field.wire)?;
+                let (right_var, right_value) = self.get(*right, &right_field.wire)?;
+                match (
+                    self.ts.var(left_var).domain.number(left_value),
+                    self.ts.var(right_var).domain.number(right_value),
+                ) {
+                    (Some(left), Some(right)) => match op {
+                        CmpOp::Eq => left == right,
+                        CmpOp::Ne => left != right,
+                        CmpOp::Lt => left < right,
+                        CmpOp::Le => left <= right,
+                        CmpOp::Gt => left > right,
+                        CmpOp::Ge => left >= right,
+                    },
+                    (left, right) => match op {
+                        CmpOp::Eq => left == right,
+                        CmpOp::Ne => left != right,
+                        _ => false,
+                    },
                 }
             }
         })
@@ -251,15 +282,14 @@ fn matching<'f>(fns: &'f [FnDecl], action: &str, rows: &Rows<'_>) -> Vec<&'f FnD
         .collect()
 }
 
-#[test]
-fn functions_agree_with_the_transition_system() {
+fn compare_samples(targets: Vec<String>) -> (usize, usize, usize, usize, usize) {
     let mut checked_moves = 0usize;
     let mut checked_rows = 0usize;
     let mut checked_rules = 0usize;
     let mut checked_keys = 0usize;
     let mut checked_events = 0usize;
     let mut failures: Vec<String> = Vec::new();
-    for sample in samples() {
+    for sample in targets {
         if !check_passes(&sample) {
             continue;
         }
@@ -628,6 +658,19 @@ fn functions_agree_with_the_transition_system() {
         failures.len(),
         failures.join("\n")
     );
+    (
+        checked_moves,
+        checked_rows,
+        checked_rules,
+        checked_keys,
+        checked_events,
+    )
+}
+
+#[test]
+fn functions_agree_with_the_transition_system() {
+    let (checked_moves, checked_rows, checked_rules, checked_keys, checked_events) =
+        compare_samples(samples());
     assert!(checked_moves > 1000, "checked only {checked_moves} moves");
     assert!(
         checked_rules > 1000,
@@ -660,4 +703,18 @@ fn type_name(id: &str) -> String {
         }
     }
     out
+}
+
+#[test]
+fn nullable_numeric_functions_agree_with_the_transition_system() {
+    let (moves, rows, _, _, _) =
+        compare_samples(vec!["samples/python-domain/numeric_policy.rdra".into()]);
+    assert!(
+        moves > 0,
+        "the nullable comparison fixture must exercise actual transitions"
+    );
+    assert!(
+        rows > 0,
+        "the nullable comparison fixture must compare disabled and enabled rows"
+    );
 }

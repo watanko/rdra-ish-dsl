@@ -238,6 +238,9 @@ fn columns_text(model: &SemanticModel, columns: &[ModelColumn]) -> String {
 
 fn type_text(model: &SemanticModel, col_type: &ColumnType) -> String {
     match col_type {
+        ColumnType::Record(key) => model.dtos[*key].id.clone(),
+        ColumnType::List(item) => format!("List({})", type_text(model, item)),
+        ColumnType::Tuple(item) => format!("Tuple({})", type_text(model, item)),
         ColumnType::Int => "Int".to_string(),
         ColumnType::String => "String".to_string(),
         ColumnType::Money => "Money".to_string(),

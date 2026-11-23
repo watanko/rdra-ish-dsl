@@ -235,6 +235,7 @@ fn generate_key_columns(
             is_indexed: false,
             is_nullable: optional,
             default_val: None,
+            default_quoted: false,
             label: None,
             check_constraints: Vec::new(),
             is_soft_delete: false,
@@ -328,6 +329,9 @@ fn adopt_key_columns(
 
 fn type_name(model: &SemanticModel, col_type: &ColumnType) -> String {
     match col_type {
+        ColumnType::Record(key) => model.dtos[*key].id.clone(),
+        ColumnType::List(item) => format!("List({})", type_name(model, item)),
+        ColumnType::Tuple(item) => format!("Tuple({})", type_name(model, item)),
         ColumnType::Int => "Int".to_string(),
         ColumnType::String => "String".to_string(),
         ColumnType::Money => "Money".to_string(),

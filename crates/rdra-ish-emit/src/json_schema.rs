@@ -122,6 +122,22 @@ fn object_schema(
 
 fn column_schema(model: &SemanticModel, fk: Option<&ForeignKey>, column: &ModelColumn) -> Value {
     let mut schema = match &column.col_type {
+        ColumnType::Record(key) => {
+            let reference = json!({ "$ref": format!("#/$defs/Dto.{}", model.dtos[*key].id) });
+            if column.is_nullable {
+                json!({ "anyOf": [reference, { "type": "null" }] })
+            } else {
+                reference
+            }
+        }
+        ColumnType::List(item) | ColumnType::Tuple(item) => {
+            let mut element = column.clone();
+            element.col_type = *item.clone();
+            element.is_nullable = false;
+            element.default_val = None;
+            element.label = None;
+            json!({ "type": json_type("array", column.is_nullable), "items": column_schema(model, None, &element) })
+        }
         ColumnType::Int => json!({ "type": json_type("integer", column.is_nullable) }),
         ColumnType::String => json!({ "type": json_type("string", column.is_nullable) }),
         ColumnType::Money | ColumnType::Decimal => {
@@ -160,7 +176,16 @@ fn column_schema(model: &SemanticModel, fk: Option<&ForeignKey>, column: &ModelC
         if let Some(default) = &column.default_val {
             obj.insert(
                 "default".to_string(),
-                default_value(default, &column.col_type),
+                if !column.default_quoted && column.is_nullable && default == "null" {
+                    Value::Null
+                } else if !column.default_quoted
+                    && default == "empty"
+                    && matches!(column.col_type, ColumnType::List(_) | ColumnType::Tuple(_))
+                {
+                    json!([])
+                } else {
+                    default_value(default, &column.col_type)
+                },
             );
         }
         insert_column_extensions(model, obj, fk, column);

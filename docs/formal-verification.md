@@ -56,6 +56,21 @@ state-model specs beside it check the deadlocks and the witnesses.
 When `check` finds lifecycle errors, `export --kind tla` still writes every spec, exits 0,
 and prints one note with the error count that names the state-model specs and `verify`.
 
+### Birth-only history in state-model exploration
+
+`verify` keeps a concrete representative of states that differ only in columns read
+on the successor of their own creation. It still enumerates every creation choice and
+checks every post-guard. Existence, owners and instance slots remain in the key, so a
+call that needs a third row still cannot run at `InstanceCount=2`. A column is retained
+if a later guard reads it, its row is later written, a check or temporal property reads
+it, it is a state-model column, or a guarded choice names it. This is a strong
+bisimulation for the retained state: every member has the same labelled future after
+projecting away the old birth data. Counterexample paths are replayed through the
+original step relation to recover the actual values. The CLI prints when it uses this
+quotient. It does not change the input model, bounds, caps, or TLC safety/temporal specs.
+Existing independent sub-lifecycle reductions keep their own exploration and lifting.
+The graph and view generators continue to use ordinary exploration.
+
 ### State models with TLC alone
 
 <!-- constrained-by #what-verify-checks -->
@@ -146,6 +161,7 @@ stays as it was.
 | `creates` | `FirstAbsent(<E>_exists, p)` and `<E>_exists' = ... "present"`. A deleted slot is never reused. |
 | `deletes` | `<E>_exists'` becomes `"deleted"`, columns and owners return to the base value. |
 | `sets`, `transitions(UC, E.col, a -> b)` | Primed assignments. A transition guards `col = a` and writes `b`; arms to several targets write through a `CASE` on the source. `UNCHANGED` lists every variable the action does not assign, an entity the action leaves alone by its tuple `<E>_vars`. |
+| `sets(UC, E.timestamp == now)` on a DateTime column | The successor timestamp equals the current clock, on creation or update; unlike `present`, it is not an arbitrary non-null time. |
 | Variation column of a created instance | `\E v0 \in {values} : col' = ...`, so TLC explores every value. `@default` does not pin it. |
 | `applies_to(Condition, UseCase \| Api)` with a `holds` body | A guard conjunct on the use case's operator. A condition on a created instance is evaluated on the primed variable, after the assignments and the `UNCHANGED` that bind every primed variable it reads. |
 | Comparison proposition driven by `drives(UC, E.col op rhs, bool)` | A Boolean variable. An undriven comparison is TLC arithmetic on the Int columns. |
@@ -211,7 +227,7 @@ of that entity's slots, so it reaches a superset: the `bounds:` line says so (`e
 check does not read are unbounded`). An `ok` on every cone is the whole-model `ok`, and a
 violation on a cone is a violation of the model, possibly with more instances of the
 unread entity than the bound. For a temporal property this is the `FreesSlots` case
-below. Cones over the same variables share one run. A cone with an independent
+below. Cones over the same variables share one run. Safety runs stop at the first violation, then rerun the remaining checks until every distinct violation is reported or the rest pass. A failing remaining run stays a tool error. A cone with an independent
 sub-lifecycle is explored and printed reduced by it (see
 [Reduction by an independent sub-lifecycle](#reduction-by-an-independent-sub-lifecycle)).
 This keeps clinic-ops tractable: a whole-model run at `InstanceCount=2` took 62 s and

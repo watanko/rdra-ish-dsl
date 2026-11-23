@@ -239,6 +239,11 @@ pub enum ColumnType {
     Enum(Vec<std::string::String>),
     /// Attribute column typed by a `variation`. Never a lifecycle column, never a state axis.
     Variation(VariationKey),
+    /// Embedded contract record, resolved through module imports.
+    Record(DtoKey),
+    /// Ordered contract collections; never an entity lifecycle axis.
+    List(Box<ColumnType>),
+    Tuple(Box<ColumnType>),
 }
 
 /// カラム
@@ -251,6 +256,8 @@ pub struct ModelColumn {
     pub is_indexed: bool,
     pub is_nullable: bool,
     pub default_val: Option<std::string::String>,
+    /// Quoted text must never become a null or boolean constructor default.
+    pub default_quoted: bool,
     pub label: Option<std::string::String>,
     pub check_constraints: Vec<ColumnCheck>,
     pub is_soft_delete: bool,

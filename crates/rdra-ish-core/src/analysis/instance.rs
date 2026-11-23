@@ -8,7 +8,7 @@ use crate::location::{DeclSite, DiagCtxt};
 use crate::model::*;
 use rdra_ish_syntax::ast::*;
 
-use super::arg_resolve::resolve_variation;
+use super::arg_resolve::{resolve_dto, resolve_variation};
 use super::column_expr::resolve_column_exprs;
 use super::metadata::{
     adr_metadata_is_empty, api_metadata_is_empty, field_metadata_is_empty, nfr_metadata_is_empty,
@@ -323,7 +323,7 @@ pub(crate) fn register_instance(
         }
         Kind::Dto => {
             report_duplicate_columns(inst, "dto", ctx, diags);
-            let fields = model_columns(model, inst, ctx, diags);
+            let fields = Vec::new();
             let k = model.dtos.insert(Dto {
                 id: inst.id.clone(),
                 label: inst.label.clone(),
@@ -396,6 +396,20 @@ pub(crate) fn register_instance(
     );
 }
 
+/// Resolve DTO bodies after every declaration has a symbol, including forward references.
+pub(crate) fn populate_dto_fields(
+    model: &mut SemanticModel,
+    inst: &InstanceDecl,
+    ctx: DiagCtxt,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let Some(key) = resolve_dto(model, &inst.id, ctx) else {
+        return;
+    };
+    let fields = model_columns(model, inst, ctx, diags);
+    model.dtos[key].fields = fields;
+}
+
 fn model_columns(
     model: &SemanticModel,
     inst: &InstanceDecl,
@@ -427,6 +441,64 @@ fn ast_column_to_model(
         ColType::Bool => ColumnType::Bool,
         ColType::Decimal => ColumnType::Decimal,
         ColType::Enum(vs) => ColumnType::Enum(vs.iter().map(|v| v.value.clone()).collect()),
+        ColType::Named(name) if inst.kind == Kind::Dto && (name == "List" || name == "Tuple") => {
+            match col.type_args.as_slice() {
+                [TypeArg::Ident(item)] => {
+                    let element = match item.as_str() {
+                        "String" => Some(ColumnType::String),
+                        "Int" => Some(ColumnType::Int),
+                        "Bool" => Some(ColumnType::Bool),
+                        "DateTime" => Some(ColumnType::DateTime),
+                        "Date" => Some(ColumnType::Date),
+                        "Decimal" => Some(ColumnType::Decimal),
+                        "Money" => Some(ColumnType::Money),
+                        _ => resolve_dto(model, item, ctx)
+                            .map(ColumnType::Record)
+                            .or_else(|| {
+                                resolve_variation(model, item, ctx).map(ColumnType::Variation)
+                            }),
+                    };
+                    match element {
+                        Some(element) if name == "List" => ColumnType::List(Box::new(element)),
+                        Some(element) => ColumnType::Tuple(Box::new(element)),
+                        None => {
+                            push_error(
+                                ctx,
+                                diags,
+                                col.span.clone(),
+                                RdraError::UnknownColumnType {
+                                    entity: inst.id.clone(),
+                                    col: col.name.clone(),
+                                    name: item.clone(),
+                                },
+                            );
+                            ColumnType::Enum(Vec::new())
+                        }
+                    }
+                }
+                _ => {
+                    push_error(
+                        ctx,
+                        diags,
+                        col.span.clone(),
+                        RdraError::InvalidTypeArgs {
+                            entity: inst.id.clone(),
+                            col: col.name.clone(),
+                            written: written_type(col),
+                            hint:
+                                "List and Tuple require one scalar, variation, or DTO element type"
+                                    .into(),
+                        },
+                    );
+                    ColumnType::Enum(Vec::new())
+                }
+            }
+        }
+        ColType::Named(name)
+            if inst.kind == Kind::Dto && resolve_dto(model, name, ctx).is_some() =>
+        {
+            ColumnType::Record(resolve_dto(model, name, ctx).unwrap())
+        }
         ColType::Named(name) => match resolve_variation(model, name, ctx) {
             Some(key) => ColumnType::Variation(key),
             None => {
@@ -453,6 +525,7 @@ fn ast_column_to_model(
         is_indexed: false,
         is_nullable: false,
         default_val: None,
+        default_quoted: false,
         label: None,
         check_constraints: Vec::new(),
         is_soft_delete: false,
@@ -483,7 +556,10 @@ fn ast_column_to_model(
             Annotation::Null => mc.is_nullable = true,
             Annotation::Default { value: v, quoted } => {
                 // A value of an Enum or a variation is a token; a quoted string is free text (#48).
-                if *quoted && matches!(mc.col_type, ColumnType::Enum(_) | ColumnType::Variation(_))
+                if *quoted
+                    && (matches!(mc.col_type, ColumnType::Enum(_))
+                        || (matches!(mc.col_type, ColumnType::Variation(_))
+                            && !value_needs_quotes(v)))
                 {
                     push_error(
                         ctx,
@@ -498,7 +574,13 @@ fn ast_column_to_model(
                 }
                 if let ColumnType::Variation(key) = &mc.col_type {
                     if let Some(variation) = model.variations.get(*key) {
-                        if !variation.has_value(v) {
+                        let null_default = !quoted
+                            && v == "null"
+                            && col
+                                .annotations
+                                .iter()
+                                .any(|ann| matches!(ann, Annotation::Null));
+                        if !(null_default || variation.has_value(v)) {
                             push_error(
                                 ctx,
                                 diags,
@@ -513,6 +595,7 @@ fn ast_column_to_model(
                     }
                 }
                 mc.default_val = Some(v.clone());
+                mc.default_quoted = *quoted;
             }
             Annotation::Label(l) => mc.label = Some(l.clone()),
             Annotation::SoftDelete => mc.is_soft_delete = true,
@@ -732,6 +815,7 @@ fn type_detail(col_type: &ColumnType, args: &[TypeArg]) -> Result<TypeDetail, St
     let mut detail = TypeDetail::default();
     match (col_type, args) {
         (_, []) => {}
+        (ColumnType::List(_) | ColumnType::Tuple(_), [TypeArg::Ident(_)]) => {}
         (ColumnType::String, [n]) => {
             detail.length =
                 Some(int(n).ok_or("`String(n)` takes a positive length, such as `String(255)`")?);

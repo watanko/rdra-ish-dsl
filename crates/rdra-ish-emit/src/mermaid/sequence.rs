@@ -37,6 +37,7 @@ fn effect_value(value: &EffectValue) -> String {
         EffectValue::Int(number) => number.to_string(),
         EffectValue::Present => "set".to_string(),
         EffectValue::Null => "null".to_string(),
+        EffectValue::Now => "now".to_string(),
     }
 }
 

@@ -140,7 +140,7 @@ usecase FulfillOrder "Fulfill Order"
 creates(CreateOrder, Order)
 transitions(SubmitOrder, Order.status, draft -> submitted)
 transitions(FulfillOrder, Order.status, submitted -> fulfilled)
-sets(SubmitOrder, Order.submitted_at == present)
+sets(SubmitOrder, Order.submitted_at == now)
 ```
 
 Event-started BUC, a timer, and a condition with a body:
@@ -299,3 +299,8 @@ temporal properties.
 
 Load `references/07-rules.md` when reachable state combinations need
 entity constraints.
+
+For a DateTime assigned the current clock, use `sets(UC, Entity.timestamp == now)`.
+`present` records only non-nullness and permits any non-null time during exploration.
+Guard a clock copy with `applies_to(Condition, UC)`; `.when` guards literal values, not
+a copied clock or column. Python and SQL policies take the supplied `now` clock.

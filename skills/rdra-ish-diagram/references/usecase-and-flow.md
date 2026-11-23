@@ -85,7 +85,7 @@ rdra-ish diagram src/ --kind flow --buc <BucId> --format mermaid
 
 - The type line is `flowchart TD`. Each flow is `subgraph flow__<id>` holding its steps.
 - `-->|precedes|`, `-->|branches|`, `-.->|excepts|`, and `-->|repeats|` run between steps;
-  an unlabelled `-.->` (`covers`) runs from a step to the use cases, APIs, events, and timers it covers,
+  an unlabelled `-.->` (`covers`) runs from a step to the use cases, APIs, events, timers, conditions, and variations it covers,
   which sit outside the flows.
 - A step of a flow that exactly one actor performs (`performs(Actor, Step)`) sits in
   `subgraph lane__<Flow>__<Actor>`, whose first line is

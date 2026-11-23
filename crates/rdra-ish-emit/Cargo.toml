@@ -13,6 +13,7 @@ rdra-ish-syntax  = { path = "../rdra-ish-syntax" }
 csv        = { workspace = true }
 thiserror  = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 insta        = { workspace = true }

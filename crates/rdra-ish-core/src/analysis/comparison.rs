@@ -132,6 +132,7 @@ fn column_values(
 /// - `"none"`: 比較不可（比較を拒否）
 pub(crate) fn type_category(col_type: &ColumnType) -> &'static str {
     match col_type {
+        ColumnType::Record(_) | ColumnType::List(_) | ColumnType::Tuple(_) => "none",
         ColumnType::Int | ColumnType::Money | ColumnType::Decimal => "numeric",
         ColumnType::Date | ColumnType::DateTime => "temporal",
         ColumnType::String | ColumnType::Bool | ColumnType::Enum(_) | ColumnType::Variation(_) => {

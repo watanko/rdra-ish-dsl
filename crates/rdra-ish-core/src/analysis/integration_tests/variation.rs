@@ -133,3 +133,65 @@ transitions(Pay, Payment.status, pending -> posted)
     columns.sort();
     assert_eq!(columns, vec!["method", "status"]);
 }
+
+#[test]
+fn dto_fields_resolve_forward_records_and_ordered_collections() {
+    let (model, diags) = build(
+        r#"
+        dto Envelope "Envelope" {
+            user: User
+            users: List(User) @default(empty)
+            tags: Tuple(String)
+        }
+        dto User "User" { name: String }
+    "#,
+    );
+    assert!(errors(&diags).is_empty(), "{diags:?}");
+    let envelope = model.dtos.values().find(|d| d.id == "Envelope").unwrap();
+    assert!(matches!(envelope.fields[0].col_type, ColumnType::Record(_)));
+    assert!(
+        matches!(&envelope.fields[1].col_type, ColumnType::List(item) if matches!(**item, ColumnType::Record(_)))
+    );
+    assert!(
+        matches!(&envelope.fields[2].col_type, ColumnType::Tuple(item) if **item == ColumnType::String)
+    );
+}
+
+#[test]
+fn dto_collections_reject_unknown_elements_and_entity_embedding() {
+    for src in [
+        r#"dto Envelope "E" { users: List(Missing) }"#,
+        r#"dto User "U" { name: String } entity E "E" { user: User }"#,
+    ] {
+        let (_, diags) = build(src);
+        assert!(
+            errors(&diags)
+                .iter()
+                .any(|e| matches!(e, RdraError::UnknownColumnType { .. })),
+            "{diags:?}"
+        );
+    }
+}
+
+#[test]
+fn a_quoted_variation_wire_value_and_nullable_default_remain_distinct() {
+    let (model, diags) = build(
+        r#"
+        variation Model "Model" { "model-3.1" "model-3.8" }
+        dto Settings "Settings" { selected: Model @default(null) @null }
+    "#,
+    );
+    assert!(errors(&diags).is_empty(), "{diags:?}");
+    let variation = model.variations.values().next().unwrap();
+    assert_eq!(
+        variation
+            .values
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect::<Vec<_>>(),
+        ["model-3.1", "model-3.8"]
+    );
+    let field = &model.dtos.values().next().unwrap().fields[0];
+    assert_eq!(field.default_val.as_deref(), Some("null"));
+    assert!(!field.default_quoted);
+}
