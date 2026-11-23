@@ -504,3 +504,76 @@ for name in ('policy.py', 'sql_policy.py'):
 "#,
     );
 }
+
+#[test]
+fn shared_guards_preserve_three_guarded_destinations_and_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("model.rdra"),
+        r#"
+variation Choice "Choice" { accept reject skip }
+entity Job "Job" { id: Int @pk status: Enum(open, accepted, rejected, skipped) @default(open) }
+entity Context "Invocation" { enabled: Bool healthy: Bool choice: Choice }
+relate(Context, Job, N:1)
+condition Enabled "Enabled"
+holds(Enabled, Context.enabled == true)
+condition Healthy "Healthy"
+holds(Healthy, Context.healthy == true)
+condition Accept "Accept"
+holds(Accept, Context.choice == accept)
+condition Reject "Reject"
+holds(Reject, Context.choice == reject)
+condition Skip "Skip"
+holds(Skip, Context.choice == skip)
+usecase Finish "Finish"
+creates(Finish, Context)
+updates(Finish, Job)
+chooses(Finish, Context.enabled)
+chooses(Finish, Context.healthy)
+chooses(Finish, Context.choice)
+applies_to(Enabled, Finish)
+applies_to(Healthy, Finish)
+transitions(Finish, Job.status, open -> accepted).when(Accept)
+transitions(Finish, Job.status, open -> rejected).when(Reject)
+transitions(Finish, Job.status, open -> skipped).when(Skip)
+"#,
+    )
+    .unwrap();
+    for (language, file) in [
+        ("py-policy", "policy.py"),
+        ("py-sql-policy", "sql_policy.py"),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+            .current_dir(dir.path())
+            .args(["codegen", "model.rdra", "--lang", language, "-o", file])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    python(
+        &dir,
+        r#"
+from itertools import product
+from unittest import TestCase
+from sqlalchemy import create_engine, literal, select
+import policy as p
+import sql_policy as s
+outcomes = {'accept': 'accepted', 'reject': 'rejected', 'skip': 'skipped'}
+with create_engine('sqlite://').connect() as db:
+    for enabled, healthy, choice, status in product((False, True), (False, True), outcomes, ('open', 'accepted', 'rejected', 'skipped')):
+        inputs = dict(context_enabled=enabled, context_healthy=healthy, context_choice=choice, job_status=status)
+        expected = outcomes[choice] if enabled and healthy and status == 'open' else None
+        if expected is None:
+            with TestCase().assertRaises(ValueError):
+                p.decide_finish_status(**inputs)
+        else:
+            assert p.decide_finish_status(**inputs) == expected
+        actual = db.scalar(select(s.decide_finish_status(**{key: literal(value) for key, value in inputs.items()})))
+        assert actual == expected, (inputs, expected, actual)
+"#,
+    );
+}

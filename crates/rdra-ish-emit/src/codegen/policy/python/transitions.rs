@@ -1,7 +1,7 @@
 //! State decisions share the conditions used by the imperative and SQL printers.
 
 use super::{snake, string_literal, Policy, Printer, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) -> Result<()> {
     let mut groups = BTreeMap::new();
@@ -35,6 +35,19 @@ pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) ->
             visiting: Vec::new(),
         };
         let state = printer.field(&transitions[0].target)?;
+        let global_conditions = policy
+            .guards
+            .iter()
+            .filter(|guard| guard.usecase == usecase)
+            .map(|guard| printer.condition_call(&guard.condition))
+            .collect::<Result<Vec<_>>>()?;
+        let source_values = transitions
+            .iter()
+            .map(|transition| string_literal(&transition.from))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut branches = Vec::new();
         let mut destinations = Vec::new();
         let mut target_groups = BTreeMap::new();
@@ -55,13 +68,10 @@ pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) ->
             } else {
                 format!("({state} in ({values},))")
             }];
-            let guard_names = policy
-                .guards
-                .iter()
-                .filter(|guard| guard.usecase == usecase)
-                .map(|guard| &guard.condition)
-                .chain(guard.iter());
-            for name in guard_names {
+            if sql {
+                conditions.extend(global_conditions.iter().cloned());
+            }
+            if let Some(name) = &guard {
                 conditions.push(printer.condition_call(name)?);
             }
             let expression = if sql {
@@ -95,6 +105,17 @@ pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) ->
                 .join(", ");
             out.push_str(&format!("    return case({cases})\n\n\n"));
         } else {
+            // Shared pure guards need one check, while invalid source states still reject first.
+            if !global_conditions.is_empty() {
+                let condition = format!(
+                    "({state} in ({source_values},)) and {}",
+                    global_conditions.join(" and ")
+                );
+                out.push_str(&format!(
+                    "    if not ({condition}):\n        raise ValueError({})\n",
+                    string_literal(&format!("{usecase}: no enabled transition"))
+                ));
+            }
             for (condition, destination) in branches {
                 out.push_str(&format!(
                     "    if {condition}:\n        return {destination}\n"
