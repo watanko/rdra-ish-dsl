@@ -4,6 +4,14 @@
 
 ### Added
 
+- Python and SQL policy selectors accept multiple destinations with provably disjoint
+  guards. They reuse generated predicates and reject ambiguous outcomes without adding
+  branch priority. Value-less `chooses` accepts non-nullable Bool invocation inputs
+  and nullable or non-nullable DateTime observations.
+- Python and SQL policies compile `sets` effects, including supplied timestamps, nulls,
+  literals, and bound-column copies. Enum fields publish Literal aliases for typed
+  consumers; adapters retain concrete clocks, external identifiers, and writes.
+
 - Business steps can cover existing conditions and variations. These are traceability
   references, not implicit execution guards. Policy JSON now exports declared flows,
   performers, covered references, and ordering edges, including cross-flow hand-offs.

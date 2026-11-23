@@ -232,7 +232,7 @@ qualify the argument with a kind prefix — see [Kind-Qualified References](#kin
 | `after` | `(UseCase).assert(...)` | A temporal anchor assertion: a predicate on the state that each run of the use case leaves, read after its last step on the run's rows. |
 | `sets` | `(UseCase, Entity.column == value)` | An explicit column effect, read by state derivation. Use `present` (not PostgreSQL type names) for nullable non-null. `Entity.column == Source.column` copies a value. `.when(Condition)` on a literal leaves the value only while the condition holds; see [A value that follows a condition](#a-value-that-follows-a-condition-when). |
 | `drives` | `(UseCase, Entity.column op rhs, true \| false)` | Drives the truth value of a comparison proposition (a derived Bool axis) in state derivation. |
-| `chooses` | `(UseCase, Entity.column)` | The actor picks the value of a variation-typed column again when the use case runs: any value of the variation may follow, as on a creation. See [Choosing a value again](#choosing-a-value-again-chooses). |
+| `chooses` | `(UseCase, Entity.column)` | The actor picks the value of a variation-typed or Bool column again when the use case runs: any value of the variation may follow, as on a creation. See [Choosing a value again](#choosing-a-value-again-chooses). |
 | `chooses` | `(UseCase, Entity.column, value)` | One value the actor may pick; the lines of one use case and column list the choice. `.when(Condition)` guards this value only. See [Guard one value](#guard-one-value-when). |
 | `links`, `relinks`, `unlinks` | `(UseCase, Entity, Entity)` | The use case links an unlinked child row to a parent, moves a linked child to another parent, or unlinks it, through the key from the first entity to the second. See [Linking, moving and unlinking](#linking-moving-and-unlinking-an-existing-child-links-relinks-unlinks). |
 
@@ -1320,6 +1320,12 @@ What a variation column does differently from an inline `Enum`:
 | ER diagram, `csv --kind entity`, `list --kind entity` | Type `Enum` | Type is the variation id |
 
 #### Choosing a value again: `chooses`
+
+A value-less `chooses(UseCase, Entity.flag)` also accepts a Bool column, for a
+non-nullable Bool input. Value-less choices also accept DateTime observations, including
+nullable timestamps; explicit third-argument choices remain variation-only. It can model invocation input separately from
+persisted entity state. Listed choices with a third argument still require a variation.
+
 
 A created instance takes any value of a variation column, unless the creating use case
 `sets` it: the actor picks it. An update keeps the value. When a use case lets the actor

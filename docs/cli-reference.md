@@ -1624,9 +1624,19 @@ no rule checks. It refuses a model with model errors. Two declarations that gene
 
 ### Executable decisions and adapter expressions
 
-`--lang py-policy` compiles executable `condition` bodies to typed, keyword-only Python predicates. It expands logical `@derived` fields and emits `decide_<usecase>_<column>` functions for state transitions. A disabled transition raises `ValueError`; value sets and their optional labels remain structured constants in declaration order.
+`--lang py-policy` compiles executable `condition` bodies to typed, keyword-only Python predicates. It expands logical `@derived` fields and emits `decide_<usecase>_<column>` functions for state transitions and `sets` column effects. A disabled selection raises `ValueError`; value sets and their optional labels remain structured constants in declaration order. Enum fields also publish Literal type aliases for consumers of computed states.
 
-`--lang py-sql-policy` emits the same decisions as SQLAlchemy 2 expressions. Adapters supply columns, bind parameters, clocks, joins, transactions, and external operations. SQL `CASE` expressions return NULL if no transition is enabled; callers must retain the corresponding selection guard. The transition functions select one state-column value; adapters must execute the remaining modeled column effects. Neither mode chooses rows or executes I/O. Nullable equality treats two missing values as equal; a missing and a present value differ. Ordering with any missing operand is false. SQL output uses null-safe equality and explicit presence guards, so negation also agrees with the DSL and pure Python.
+Python policy state selectors accept multiple destinations from one source only when
+their guards are provably disjoint, including complementary comparisons and Boolean
+derivations. Ambiguous destinations are rejected rather than assigned branch priority.
+The selectors call the generated predicates, so each guard has one executable definition.
+
+An unlabeled variation used as an entity input type is represented by its field's
+Literal alias. Standalone variations and labeled variations additionally publish
+their value sets and optional label maps; typed inputs do not duplicate unlabeled
+runtime metadata. The `policy` JSON output retains every variation in either case.
+
+`--lang py-sql-policy` emits the same decisions as SQLAlchemy 2 expressions. Adapters supply columns, bind parameters, clocks, joins, transactions, and external operations. SQL `CASE` expressions return NULL if no transition or column effect is enabled; callers must retain the corresponding selection guard. Each selector returns one column value; adapters execute the modeled writes together within the declared transaction. A `present` effect receives a typed `new_<entity>_<column>` value from the adapter, keeping concrete timestamps and external identifiers outside the decision. `null`, literal, and bound-column copy effects compile directly. Abstract integer clock marks cannot supply concrete dates and are rejected by the executable modes. Neither mode chooses rows or executes I/O. Nullable equality treats two missing values as equal; a missing and a present value differ. Ordering with any missing operand is false. SQL output uses null-safe equality and explicit presence guards, so negation also agrees with the DSL and pure Python.
 
 ```sh
 rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-policy -o decisions.py
@@ -1635,7 +1645,7 @@ rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-sql-policy 
 
 `--lang policy` emits the typed semantic decision structure as JSON, including qualified references, logical derivations, guards, transitions, effects, and relation paths. It retains unsupported arithmetic derivations explicitly rather than presenting them as executable predicates.
 
-The executable modes reject conditions without a body, quantified row selection, arithmetic derivations used by a condition, recursive derivations, and transitions with different destinations from the same source state. Relation paths describe row ownership; adapters must bind the corresponding related rows. These modes do not compile arbitrary text processing or collection algorithms, guarantee scheduling/fairness, or replace concurrency control. The ordinary `check` gate still runs before generation.
+The executable modes reject conditions without a body, quantified row selection, arithmetic derivations used by a condition, recursive derivations, and overlapping transition or effect outcomes whose guards cannot be proved disjoint. Relation paths describe row ownership; adapters must bind the corresponding related rows. These modes do not compile arbitrary text processing or collection algorithms, guarantee scheduling/fairness, or replace concurrency control. The ordinary `check` gate still runs before generation.
 
 The experimental `codegen --lang policy` output also includes `flows`: each flow
 contains its BUC IDs, steps, typed covered targets, performers, and declared ordering

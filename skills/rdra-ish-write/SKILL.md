@@ -255,6 +255,8 @@ import shared.actors.{Staff as S}
 - A use case drives each state change: `transitions(CapturePay, Order.status, pending ->
   paid)`. An event only connects use cases (or a use case and an external system), so
   declare one only when something consumes it.
+- A value-less `chooses(UC, E.flag)` can receive a non-nullable Bool input;
+  `chooses(UC, E.timestamp)` also accepts a nullable or non-nullable DateTime observation.
 - Type a column by a `variation` (`method: PaymentMethod`) when an actor chooses its
   value; keep an inline `Enum(...)` for lifecycle columns and values that use cases set.
 - A `condition` is an RDRA 条件. Without a body it is a trace link; with a `holds` body

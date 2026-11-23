@@ -13,13 +13,13 @@ mod flows;
 mod python;
 pub(super) use python::print_python;
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 struct Reference {
     entity: String,
     column: String,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 struct Operand {
     kind: String,
     reference: Option<Reference>,
@@ -28,7 +28,7 @@ struct Operand {
     boolean: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 struct Comparison {
     left: Reference,
     operator: String,

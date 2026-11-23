@@ -319,3 +319,133 @@ with engine.connect() as connection:
 "#,
     );
 }
+
+#[test]
+fn disjoint_guarded_destinations_execute_without_branch_priority() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = r#"
+entity Task "Task" {
+    status: Enum(open, accepted, rejected) @default(open)
+}
+
+entity FinishInput "Invocation input" {
+    approved: Bool
+    accepted: Bool @derived(approved == true)
+}
+condition Acceptable "Accept"
+holds(Acceptable, FinishInput.accepted == true)
+condition Rejectable "Reject"
+holds(Rejectable, FinishInput.accepted == false)
+usecase Finish "Finish task"
+creates(Finish, FinishInput)
+chooses(Finish, FinishInput.approved)
+updates(Finish, Task)
+transitions(Finish, Task.status, open -> accepted).when(Acceptable)
+transitions(Finish, Task.status, open -> rejected).when(Rejectable)
+"#;
+    std::fs::write(dir.path().join("model.rdra"), model).unwrap();
+    for (lang, file) in [
+        ("py-policy", "policy.py"),
+        ("py-sql-policy", "sql_policy.py"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+            .current_dir(dir.path())
+            .args(["codegen", "model.rdra", "--lang", lang, "-o", file])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    python(
+        &dir,
+        r#"
+import policy as p
+import sql_policy as s
+from sqlalchemy import create_engine, literal, select
+with create_engine('sqlite://').connect() as db:
+    for approved, expected in ((True, 'accepted'), (False, 'rejected')):
+        assert p.decide_finish_status(task_status='open', finish_input_approved=approved) == expected
+        actual = db.scalar(select(s.decide_finish_status(task_status=literal('open'), finish_input_approved=literal(approved))))
+        assert actual == expected, (approved, actual)
+"#,
+    );
+    std::fs::write(
+        dir.path().join("model.rdra"),
+        model.replace("FinishInput.accepted == false", "Task.status == open"),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+        .current_dir(dir.path())
+        .args(["codegen", "model.rdra", "--lang", "py-policy"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("provably disjoint guards"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::write(
+        dir.path().join("model.rdra"),
+        model.replace("approved: Bool", "approved: Bool @null"),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+        .current_dir(dir.path())
+        .args(["codegen", "model.rdra", "--lang", "py-policy"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("nullable Bool input choices are not supported"));
+}
+
+#[test]
+fn column_effects_preserve_nullable_deadlines_and_supplied_timestamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = include_str!("../../../samples/python-domain/column_effects.rdra");
+    std::fs::write(dir.path().join("model.rdra"), model).unwrap();
+    for (lang, file) in [
+        ("py-policy", "policy.py"),
+        ("py-sql-policy", "sql_policy.py"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+            .current_dir(dir.path())
+            .args(["codegen", "model.rdra", "--lang", lang, "-o", file])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    python(
+        &dir,
+        r#"
+from datetime import datetime, timedelta
+from itertools import product
+from typing import get_args
+from sqlalchemy import create_engine, literal, select
+import policy as p
+import sql_policy as s
+now = datetime(2026, 1, 1)
+assert set(get_args(p.SNAPSHOT_STATUSValue)) == {'available', 'deleted', 'expired'}
+assert set(get_args(p.METADATA_SOURCEValue)) == {'manual', 'background'}
+assert not hasattr(p, 'OBSERVATION_SOURCE'), 'Typed inputs must not duplicate unlabeled metadata sets'
+with create_engine('sqlite://').connect() as db:
+    for deleted, expiry in product((None, now), (None, now - timedelta(seconds=1), now, now + timedelta(seconds=1))):
+        expected = 'deleted' if deleted is not None or expiry is None else 'expired' if expiry < now else 'available'
+        assert p.decide_observe_status(metadata_deleted_at=deleted, metadata_expires_at=expiry, now=now) == expected
+        actual = db.scalar(select(s.decide_observe_status(metadata_deleted_at=literal(deleted), metadata_expires_at=literal(expiry), now=literal(now))))
+        assert actual == expected, (deleted, expiry, actual)
+    assert p.decide_observe_observed_at(new_snapshot_observed_at=now) is now
+    assert db.scalar(select(s.decide_observe_observed_at(new_snapshot_observed_at=literal(now)))) == now
+    assert p.decide_clear_observation_observed_at() is None
+    assert db.scalar(select(s.decide_clear_observation_observed_at())) is None
+"#,
+    );
+}

@@ -1,0 +1,46 @@
+module column_effects
+
+variation ObservationSource "Caller-supplied observation source" {
+  manual
+  background
+}
+
+entity Snapshot "Working data view" {
+  id: Int @pk
+  status: Enum(available, deleted, expired) @default(available)
+  observed_at: DateTime @null
+}
+
+entity Metadata "Observed storage metadata" {
+  source: ObservationSource
+  deleted_at: DateTime @null
+  expires_at: DateTime @null
+  missing: Bool @derived((deleted_at != null) or (expires_at == null))
+}
+
+relate(Metadata, Snapshot, 1:1)
+condition Deleted "No usable data"
+holds(Deleted, Metadata.missing == true).along(Snapshot, Metadata)
+condition Expired "Expired data"
+holds(Expired, Metadata.missing == false, Metadata.expires_at < now).along(Snapshot, Metadata)
+condition Available "Unexpired data"
+holds(Available, Metadata.missing == false, Metadata.expires_at >= now).along(Snapshot, Metadata)
+usecase Observe "Read the current metadata"
+
+api ReadMetadata "One observation"
+  method GET
+  path "/snapshots/{id}"
+
+invokes(Observe, ReadMetadata)
+creates(ReadMetadata, Snapshot)
+creates(ReadMetadata, Metadata)
+chooses(Observe, Metadata.deleted_at)
+chooses(Observe, Metadata.expires_at)
+chooses(Observe, Metadata.source)
+sets(Observe, Snapshot.status == deleted).when(Deleted)
+sets(Observe, Snapshot.status == expired).when(Expired)
+sets(Observe, Snapshot.status == available).when(Available)
+sets(Observe, Snapshot.observed_at == present)
+usecase ClearObservation "Clear the stored observation timestamp"
+updates(ClearObservation, Snapshot)
+sets(ClearObservation, Snapshot.observed_at == null)

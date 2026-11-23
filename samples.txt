@@ -33,3 +33,5 @@ samples/formal-verification-fail/order.rdra
 samples/python-domain/model.rdra
 samples/python-domain/numeric_policy.rdra
 samples/python-domain/flow.rdra
+samples/python-domain/invocation_policy.rdra
+samples/python-domain/column_effects.rdra

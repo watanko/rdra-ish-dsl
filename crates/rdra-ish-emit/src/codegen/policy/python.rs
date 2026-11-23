@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use super::{build, Comparison, Expression, Field, Operand, Policy, Reference};
+use super::{build, ColumnType, Comparison, Expression, Field, Operand, Policy, Reference};
 use crate::codegen::{actions::snake, string_literal, CodegenError, Lang, Options};
 use rdra_ish_core::SemanticModel;
 
+mod effects;
+mod guards;
 mod transitions;
 use transitions::print_transitions;
 
@@ -25,7 +27,17 @@ pub(in crate::codegen) fn print_python(model: &SemanticModel, options: &Options)
     if sql {
         out.push_str("from sqlalchemy import and_, or_, not_, true, false, case\nfrom sqlalchemy.sql import ColumnElement, SQLColumnExpression\n\n");
     }
-    for variation in model.variations.values() {
+    for (key, variation) in &model.variations {
+        // Typed inputs already publish their field aliases; avoid redundant metadata copies.
+        let input_type = model.entities.values().any(|entity| {
+            entity
+                .columns
+                .iter()
+                .any(|column| column.col_type == ColumnType::Variation(key))
+        });
+        if input_type && variation.values.iter().all(|value| value.label.is_none()) {
+            continue;
+        }
         let name = snake(&variation.id).to_uppercase();
         let values = variation
             .values
@@ -54,6 +66,16 @@ pub(in crate::codegen) fn print_python(model: &SemanticModel, options: &Options)
             ));
         }
         out.push('\n');
+    }
+    for field in policy.fields.iter().filter(|field| field.kind == "enum") {
+        let name = enum_alias(field);
+        let values = field
+            .values
+            .iter()
+            .map(|value| string_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("{name} = Literal[{values}]\n\n"));
     }
     for condition in &policy.conditions {
         if !condition.executable || !condition.quantifiers.is_empty() {
@@ -96,6 +118,7 @@ pub(in crate::codegen) fn print_python(model: &SemanticModel, options: &Options)
         ));
     }
     print_transitions(&policy, sql, &mut out)?;
+    effects::print_effects(&policy, sql, &mut out)?;
     Ok(out)
 }
 
@@ -142,6 +165,35 @@ impl Printer<'_> {
         };
         self.arguments.insert(name.clone(), ty);
         Ok(name)
+    }
+
+    fn condition_call(&mut self, name: &str) -> Result<String> {
+        let condition = self
+            .policy
+            .conditions
+            .iter()
+            .find(|value| value.name == name)
+            .ok_or_else(|| unsupported(name))?;
+        if !condition.executable || !condition.quantifiers.is_empty() {
+            return Err(unsupported(name));
+        }
+        let mut local = Printer {
+            policy: self.policy,
+            sql: self.sql,
+            arguments: BTreeMap::new(),
+            visiting: Vec::new(),
+        };
+        for comparison in &condition.comparisons {
+            local.comparison(comparison)?;
+        }
+        let args = local
+            .arguments
+            .keys()
+            .map(|key| format!("{key}={key}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.arguments.extend(local.arguments);
+        Ok(format!("{}({args})", snake(name)))
     }
 
     fn expression(&mut self, expression: &Expression) -> Result<String> {
@@ -362,29 +414,33 @@ impl Printer<'_> {
     }
 }
 
+fn enum_alias(field: &Field) -> String {
+    format!(
+        "{}_{}Value",
+        snake(&field.reference.entity).to_uppercase(),
+        snake(&field.reference.column).to_uppercase()
+    )
+}
+
 fn field_type(field: &Field) -> Result<String> {
-    let base = match field.kind.as_str() {
+    let base = field_base_type(field)?;
+    Ok(if field.nullable {
+        format!("{base} | None")
+    } else {
+        base
+    })
+}
+
+fn field_base_type(field: &Field) -> Result<String> {
+    Ok(match field.kind.as_str() {
         "integer" => "int".into(),
         "decimal" => "Decimal".into(),
         "date" => "date".into(),
         "boolean" => "bool".into(),
         "datetime" => "datetime".into(),
         "string" => "str".into(),
-        "enum" => format!(
-            "Literal[{}]",
-            field
-                .values
-                .iter()
-                .map(|value| string_literal(value))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        "enum" => enum_alias(field),
         _ => return Err(unsupported(&field.kind)),
-    };
-    Ok(if field.nullable {
-        format!("{base} | None")
-    } else {
-        base
     })
 }
 

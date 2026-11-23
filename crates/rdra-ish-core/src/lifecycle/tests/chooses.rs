@@ -123,3 +123,25 @@ fn chooses_alone_writes_the_entity() {
         d.diags
     );
 }
+
+/// Caller-provided Boolean input must retain both values.
+#[test]
+fn boolean_invocation_input_takes_every_value() {
+    let d = derive_src(
+        r#"
+entity Input "Invocation input" { approved: Bool }
+usecase Receive "Receive input"
+creates(Receive, Input)
+chooses(Receive, Input.approved)
+forbidden(Input, approved == true)
+"#,
+    );
+    assert_eq!(violated(&d), ["Forbidden_Input_0"], "{:?}", d.diags);
+    let rows = d.rows("Input");
+    for value in ["approved=false", "approved=true"] {
+        assert!(
+            rows.iter().any(|row| row.contains(value)),
+            "{value}: {rows:?}"
+        );
+    }
+}

@@ -12,7 +12,7 @@ variation Kind "Kind" {
   a "A"
   b "B"
 }
-entity Order "Order" { id: Int @pk  status: Enum(open, paid) @default(open)  total: Int  kind: Kind  rush: Bool }
+entity Order "Order" { id: Int @pk  status: Enum(open, paid) @default(open)  total: Int  kind: Kind  rush: Bool  optional_rush: Bool @null  expires_at: DateTime @null }
 entity Ticket "Ticket" { id: Int @pk  status: Enum(pending, done) @default(pending) }
 relate(Ticket, Order, N:1)
 usecase Pay "Pay"
@@ -220,10 +220,13 @@ const FORMS: &[(&str, Expect)] = &[
         "holds(Ready, Order.status in (paid)).none(Ticket.status in (pending))",
         Recorded,
     ),
-    // chooses: the actor picks a variation column's value again; nothing else is a choice
+    // A caller may pick a variation or a non-nullable Boolean; state and numeric columns remain restricted.
     ("chooses(Pay, Order.kind)", Recorded),
     ("chooses(Pay, Order.status)", Error),
-    ("chooses(Pay, Order.rush)", Error),
+    ("chooses(Pay, Order.rush)", Recorded),
+    ("chooses(Pay, Order.optional_rush)", Error),
+    ("chooses(Pay, Order.expires_at)", Recorded),
+    ("chooses(Pay, Order.rush, true)", Error),
     ("chooses(Pay, Order.total)", Error),
     ("chooses(Pay, Order.nosuch)", Error),
     ("chooses(Pay, Nosuch.kind)", Error),

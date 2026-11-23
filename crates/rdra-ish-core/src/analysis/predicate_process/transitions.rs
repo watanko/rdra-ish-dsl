@@ -233,12 +233,15 @@ pub(super) fn process_chooses_predicate(
     };
     let hint = match &col.col_type {
         ColumnType::Variation(_) => None,
+        ColumnType::DateTime if pred.args.len() == 2 => None,
+        ColumnType::Bool if pred.args.len() == 2 && !col.is_nullable => None,
+        ColumnType::Bool if col.is_nullable => Some("nullable Bool input choices are not supported by the lifecycle representation".to_string()),
         ColumnType::Enum(_) => Some(format!(
             "an inline Enum is a state model: let the actor pick the next state with several `transitions({uc}, {entity_id}.{column}, from -> to)` arms from one state, or type the column by a `variation`",
             uc = model.use_cases[usecase].id
         )),
         ColumnType::Bool => Some(format!(
-            "write `sets({uc}, {entity_id}.{column} == true)` for a fixed value, or type the column by a `variation` whose values the actor picks",
+            "write `chooses({uc}, {entity_id}.{column})` for a Boolean input, `sets({uc}, {entity_id}.{column} == true)` for a fixed value, or use a variation for listed choices",
             uc = model.use_cases[usecase].id
         )),
         _ => Some("declare a `variation` with the values the actor picks and type the column by it".to_string()),
@@ -257,9 +260,6 @@ pub(super) fn process_chooses_predicate(
         );
         return;
     }
-    let ColumnType::Variation(variation) = &col.col_type else {
-        return;
-    };
     let value = match pred.args.get(2) {
         None => None,
         Some(arg) => {
@@ -285,6 +285,9 @@ pub(super) fn process_chooses_predicate(
                     return;
                 }
                 other => predicate_arg_display(other),
+            };
+            let ColumnType::Variation(variation) = &col.col_type else {
+                unreachable!("explicit choices require a variation");
             };
             let variation = &model.variations[*variation];
             if !variation.has_value(&written) {

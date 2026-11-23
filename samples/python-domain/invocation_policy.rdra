@@ -1,0 +1,21 @@
+module invocation_policy
+
+entity Task "Task" {
+  status: Enum(open, accepted, rejected) @default(open)
+}
+
+entity FinishInput "Invocation input" {
+  approved: Bool
+  accepted: Bool @derived(approved == true)
+}
+
+condition Acceptable "Accept"
+holds(Acceptable, FinishInput.accepted == true)
+condition Rejectable "Reject"
+holds(Rejectable, FinishInput.accepted == false)
+usecase Finish "Finish task"
+creates(Finish, FinishInput)
+chooses(Finish, FinishInput.approved)
+updates(Finish, Task)
+transitions(Finish, Task.status, open -> accepted).when(Acceptable)
+transitions(Finish, Task.status, open -> rejected).when(Rejectable)

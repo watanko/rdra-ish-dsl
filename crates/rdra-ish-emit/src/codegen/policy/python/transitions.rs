@@ -1,6 +1,6 @@
 //! State decisions share the conditions used by the imperative and SQL printers.
 
-use super::{snake, string_literal, unsupported, Policy, Printer, Result};
+use super::{snake, string_literal, Policy, Printer, Result};
 use std::collections::BTreeMap;
 
 pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) -> Result<()> {
@@ -16,14 +16,15 @@ pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) ->
             .push(transition);
     }
     for ((usecase, _, column), transitions) in groups {
-        let mut targets_by_source = BTreeMap::new();
-        for transition in &transitions {
-            if let Some(previous) = targets_by_source.insert(&transition.from, &transition.to) {
-                if previous != &transition.to {
-                    return Err(unsupported(&format!(
-                        "{usecase}: multiple destinations from {}",
-                        transition.from
-                    )));
+        for (index, left) in transitions.iter().enumerate() {
+            for right in transitions.iter().skip(index + 1) {
+                if left.from == right.from && left.to != right.to {
+                    super::guards::ensure_disjoint(
+                        policy,
+                        &usecase,
+                        left.guard.as_deref(),
+                        right.guard.as_deref(),
+                    )?;
                 }
             }
         }
@@ -61,17 +62,7 @@ pub(super) fn print_transitions(policy: &Policy, sql: bool, out: &mut String) ->
                 .map(|guard| &guard.condition)
                 .chain(guard.iter());
             for name in guard_names {
-                let condition = policy
-                    .conditions
-                    .iter()
-                    .find(|condition| &condition.name == name)
-                    .ok_or_else(|| unsupported(name))?;
-                if !condition.executable || !condition.quantifiers.is_empty() {
-                    return Err(unsupported(name));
-                }
-                for comparison in &condition.comparisons {
-                    conditions.push(printer.comparison(comparison)?);
-                }
+                conditions.push(printer.condition_call(name)?);
             }
             let expression = if sql {
                 format!("and_({})", conditions.join(", "))
