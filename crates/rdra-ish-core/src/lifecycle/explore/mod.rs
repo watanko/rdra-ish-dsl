@@ -2,12 +2,12 @@
 //! the fly; per-entity view statistics are gathered from the edges as they are found. The run
 //! keeps every edge and, per state, the edge that first reached it.
 
-mod bfs;
 mod graph;
 mod moves;
 mod scan;
-mod views;
-mod violations;
+mod search;
+
+use search::BirthHistory;
 
 pub use graph::LabelledEdges;
 
@@ -56,6 +56,7 @@ pub struct ComponentRun {
     edges: Vec<Edge>,
     /// `(action, params)` of each distinct binding an edge names.
     bindings: Vec<(ActId, Box<[u8]>)>,
+    history: BirthHistory,
 }
 
 /// The worker threads a run computes moves on, beside the thread that reads them.
@@ -204,6 +205,7 @@ struct Bindings {
 struct Bfs<'t> {
     ts: &'t TransitionSystem,
     caps: Caps,
+    history: BirthHistory,
     states: Vec<State>,
     seen: FastMap<State, u32>,
     /// Scratch for the pattern keys `observe` reads, so an edge allocates none.
@@ -229,7 +231,22 @@ impl TransitionSystem {
     /// `run` with `threads` workers. The run does not depend on the number: the states, the
     /// edges, and the findings come out in the order one thread finds them.
     fn run_on(self, caps: Caps, threads: Threads) -> ComponentRun {
-        let mut bfs = Bfs::new(&self, caps);
+        self.run_with_history(caps, threads, false)
+    }
+
+    /// Exact state-model exploration modulo columns read only during their creation.
+    /// Existing sub-lifecycle reductions keep their own trace lifting and are left intact.
+    pub fn run_state_models(self, caps: Caps) -> ComponentRun {
+        self.run_with_history(caps, Threads::Shared, true)
+    }
+
+    fn run_with_history(self, caps: Caps, threads: Threads, quotient: bool) -> ComponentRun {
+        let history = if quotient && self.reduction().is_none() {
+            BirthHistory::of(&self)
+        } else {
+            BirthHistory::default()
+        };
+        let mut bfs = Bfs::new(&self, caps, history.clone());
         bfs.go(threads);
         let Bfs {
             states,
@@ -251,11 +268,12 @@ impl TransitionSystem {
             parents,
             edges,
             bindings: bindings.list,
+            history,
         };
         for (at, reach) in &violations {
             let (trace, last) = run.trace_of(reach);
             // A reduced run holds representatives: the message describes the lifted state.
-            if run.system.reduction().is_some() {
+            if run.system.reduction().is_some() || !run.history.is_empty() {
                 let rebuilt = match reach {
                     Reach::State { inv, .. } => run.system.invariant_violation(*inv, &last),
                     Reach::Step {

@@ -56,6 +56,21 @@ state-model specs beside it check the deadlocks and the witnesses.
 When `check` finds lifecycle errors, `export --kind tla` still writes every spec, exits 0,
 and prints one note with the error count that names the state-model specs and `verify`.
 
+### Birth-only history in state-model exploration
+
+`verify` keeps a concrete representative of states that differ only in columns read
+on the successor of their own creation. It still enumerates every creation choice and
+checks every post-guard. Existence, owners and instance slots remain in the key, so a
+call that needs a third row still cannot run at `InstanceCount=2`. A column is retained
+if a later guard reads it, its row is later written, a check or temporal property reads
+it, it is a state-model column, or a guarded choice names it. This is a strong
+bisimulation for the retained state: every member has the same labelled future after
+projecting away the old birth data. Counterexample paths are replayed through the
+original step relation to recover the actual values. The CLI prints when it uses this
+quotient. It does not change the input model, bounds, caps, or TLC safety/temporal specs.
+Existing independent sub-lifecycle reductions keep their own exploration and lifting.
+The graph and view generators continue to use ordinary exploration.
+
 ### State models with TLC alone
 
 <!-- constrained-by #what-verify-checks -->

@@ -173,23 +173,37 @@ struct ArmSoFar {
     capped: Option<(String, UndecidedWhy)>,
 }
 
+#[derive(Clone, Copy)]
+enum Exploration {
+    Raw,
+    Reduced,
+    StateModels,
+}
+
 impl TransitionSystem {
     /// Explores each target on its cone; targets with the same cone share one run.
     pub fn explore_targets(&self, targets: &[Target], caps: Caps) -> TargetExploration {
-        self.explore_targets_with(targets, caps, false)
+        self.explore_targets_with(targets, caps, Exploration::Raw)
     }
 
     /// `explore_targets` with each cone reduced by its independent sub-lifecycle
     /// (`TransitionSystem::reduced`), as `verify` explores.
     pub fn explore_targets_reduced(&self, targets: &[Target], caps: Caps) -> TargetExploration {
-        self.explore_targets_with(targets, caps, true)
+        self.explore_targets_with(targets, caps, Exploration::Reduced)
+    }
+
+    /// State-model findings under the same bounds, quotienting only birth-only histories.
+    /// Safety and temporal checks retain their own cones and original TLC transition system.
+    pub fn explore_state_models(&self, entities: &[EntId], caps: Caps) -> TargetExploration {
+        let targets: Vec<_> = entities.iter().copied().map(Target::Entity).collect();
+        self.explore_targets_with(&targets, caps, Exploration::StateModels)
     }
 
     fn explore_targets_with(
         &self,
         targets: &[Target],
         caps: Caps,
-        reduce: bool,
+        mode: Exploration,
     ) -> TargetExploration {
         let mut groups: Vec<(Cone, Vec<Target>)> = Vec::new();
         let mut index: HashMap<Cone, usize> = HashMap::new();
@@ -206,7 +220,7 @@ impl TransitionSystem {
         // Each cone is explored on its own system, so the cones run side by side; the runs
         // come back in cone order, and each is what it is alone.
         let cones: Vec<ConeRun> = in_parallel(groups, jobs(), |(cone, shared)| {
-            let system = if reduce {
+            let system = if !matches!(mode, Exploration::Raw) {
                 let seeds = shared.iter().map(|t| self.target_seed(*t));
                 self.reduced_cone(&cone, seeds, caps)
             } else {
@@ -214,7 +228,11 @@ impl TransitionSystem {
             };
             ConeRun {
                 cone,
-                run: system.run(caps),
+                run: if matches!(mode, Exploration::StateModels) {
+                    system.run_state_models(caps)
+                } else {
+                    system.run(caps)
+                },
             }
         });
         let mut out = TargetExploration {

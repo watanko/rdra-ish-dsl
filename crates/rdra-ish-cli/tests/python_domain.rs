@@ -708,3 +708,79 @@ after(Touch).assert(Stamp.touched_at == now)
         }
     }
 }
+
+#[test]
+fn birth_history_quotient_preserves_tlc_failures_and_bounded_progress() {
+    if !Command::new("which")
+        .arg("tlc")
+        .output()
+        .unwrap()
+        .status
+        .success()
+    {
+        assert_ne!(std::env::var("RDRA_REQUIRE_TLC").as_deref(), Ok("1"));
+        println!("skipped birth-history verification: tlc is not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+entity Task "Task" { id: Int @pk status: Enum(open, done) @default(open) }
+entity Input "Input" { cutoff: DateTime observed: DateTime enabled: Bool }
+relate(Input, Task, N:1)
+usecase Open "Open"
+creates(Open, Task)
+sets(Open, Task.status == open)
+usecase Finish "Finish"
+updates(Finish, Task)
+creates(Finish, Input)
+chooses(Finish, Input.cutoff)
+chooses(Finish, Input.observed)
+chooses(Finish, Input.enabled)
+condition Accept "Accept"
+holds(Accept, Input.enabled == true, Input.observed < Input.cutoff).along(Input, Task)
+applies_to(Accept, Finish)
+transitions(Finish, Task.status, open -> done)
+"#;
+    for count in ["1", "2"] {
+        for failing in [false, true] {
+            let model = if failing {
+                format!("{source}\nforbidden(Task, status == done)")
+            } else {
+                source.to_string()
+            };
+            std::fs::write(dir.path().join("model.rdra"), model).unwrap();
+            let result = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+                .current_dir(dir.path())
+                .env("TMPDIR", dir.path())
+                .args([
+                    "verify",
+                    "model.rdra",
+                    "--instance-count",
+                    count,
+                    "--deny-undecided",
+                ])
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert_eq!(result.status.success(), !failing, "{stdout}{stderr}");
+            assert!(
+                stdout.contains("birth-only history quotient:"),
+                "{stdout}{stderr}"
+            );
+            assert!(!stdout.contains("not checked:"), "{stdout}{stderr}");
+            if failing {
+                assert!(
+                    stderr.contains("tlc_result: counterexample"),
+                    "{stdout}{stderr}"
+                );
+                assert!(
+                    stderr.contains("error[Forbidden_Task_0]"),
+                    "{stdout}{stderr}"
+                );
+            } else {
+                assert!(stdout.contains("tlc_result: ok"), "{stdout}{stderr}");
+            }
+        }
+    }
+}

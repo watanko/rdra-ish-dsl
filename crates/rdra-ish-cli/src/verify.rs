@@ -718,13 +718,24 @@ fn state_models(
     scope: &Scope,
     selection: &Selection,
 ) -> (usize, usize) {
-    let entities: Vec<Target> = selection
+    let entities: Vec<_> = selection
         .targets
         .iter()
-        .copied()
-        .filter(|t| matches!(t, Target::Entity(_)))
+        .filter_map(|t| match t {
+            Target::Entity(e) => Some(*e),
+            _ => None,
+        })
         .collect();
-    let mut run = ts.explore_targets_reduced(&entities, Caps::VERIFY);
+    let mut run = ts.explore_state_models(&entities, Caps::VERIFY);
+    let reduced: Vec<_> = run
+        .cones
+        .iter()
+        .filter(|c| c.run.birth_history_columns() > 0)
+        .collect();
+    if !reduced.is_empty() {
+        let columns: usize = reduced.iter().map(|c| c.run.birth_history_columns()).sum();
+        println!("birth-only history quotient: {columns} columns across {} cones; creation values checked, instance slots retained", reduced.len());
+    }
     if !scope.bucs.is_empty() {
         run.defer_progress();
     }

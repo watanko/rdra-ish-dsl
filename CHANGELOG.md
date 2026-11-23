@@ -302,7 +302,7 @@ BFS of a reduced cone.
 
 ### Fixed
 
-- The BFS of a reduced cone no longer panics (`index out of bounds` in `explore/bfs.rs`)
+- The BFS of a reduced cone no longer panics (`index out of bounds` in `explore/search/bfs.rs`)
   on a class move of an S action whose T params the extended sub-lifecycle dropped, such
   as a use case that updates a row of the sub-lifecycle and a related row outside it. A
   class move now carries its params in the cone action's numbering, and a lifted trace
