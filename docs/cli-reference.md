@@ -1637,6 +1637,10 @@ rdra-ish codegen samples/python-domain/numeric_policy.rdra --lang py-sql-policy 
 
 The executable modes reject conditions without a body, quantified row selection, arithmetic derivations used by a condition, recursive derivations, and transitions with different destinations from the same source state. Relation paths describe row ownership; adapters must bind the corresponding related rows. These modes do not compile arbitrary text processing or collection algorithms, guarantee scheduling/fairness, or replace concurrency control. The ordinary `check` gate still runs before generation.
 
+The experimental `codegen --lang policy` output also includes `flows`: each flow
+contains its BUC IDs, steps, typed covered targets, performers, and declared ordering
+links. Consumers can audit diagram coverage without parsing labels or Mermaid text.
+
 ## See Also
 
 - [language-reference.md](./language-reference.md) — the DSL syntax.

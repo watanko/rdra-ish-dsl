@@ -206,7 +206,7 @@ impl Predicate {
             Precedes | Branches | Excepts | Repeats => vec![nodes(&["step"]), nodes(&["step"])],
             Covers => vec![
                 nodes(&["step"]),
-                nodes(&["usecase", "api", "event", "timer"]),
+                nodes(&["usecase", "api", "event", "timer", "condition", "variation"]),
             ],
             Compensates => vec![nodes(&["usecase"]), nodes(&["usecase"])],
             Coordinates => vec![nodes(&["usecase"]), nodes(&["entity"]), nodes(&["entity"])],

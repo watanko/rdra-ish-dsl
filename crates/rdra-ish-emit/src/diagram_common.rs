@@ -365,7 +365,7 @@ pub const EDGE_RELATIONS: &[EdgeRelation] = &[
     rel(
         Diagram::Rdra,
         &["step"],
-        &["usecase", "api", "event", "timer"],
+        &["usecase", "api", "event", "timer", "condition", "variation"],
         "covers",
         Name,
     ),
@@ -597,7 +597,7 @@ pub const EDGE_RELATIONS: &[EdgeRelation] = &[
     rel(
         Diagram::Flow,
         &["step"],
-        &["usecase", "api", "event", "timer"],
+        &["usecase", "api", "event", "timer", "condition", "variation"],
         "covers",
         Name,
     ),

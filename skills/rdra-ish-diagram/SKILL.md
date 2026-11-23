@@ -60,7 +60,7 @@ a renderer drops the `%%` header.
 | `usecase` | UC複合図 | Use cases with actors, screens, entities, events, external systems, timers, conditions, and transitions | APIs (CRUD folded into the use case), DTOs, permissions, media, fields, BUCs |
 | `robustness` | ロバストネス図 | Actors, boundaries (screens, external systems, timers), controls (APIs, or the use case), entities; edges only actor to screen to control to entity | Events and conditions (named in edge labels), states, DTOs, permissions, media, fields, BUCs |
 | `sequence` | シーケンス図 | One use case: starter, screen, controls, entities, external systems; guards as `alt`; writes with `sets` and the lifecycle move; raised events | Other use cases (a triggered one is one message), BUCs, DTOs, permissions |
-| `flow` | 業務フロー | Flows, steps, `precedes` / `branches` / `excepts` / `repeats`, `covers`, actor lanes | Screens and entities |
+| `flow` | 業務フロー | Flows, steps, `precedes` / `branches` / `excepts` / `repeats`, `covers` (including evaluated conditions and variations), actor lanes | Screens and entities |
 | `screen` | 画面遷移図 | Screens; a solid edge per `navigates`, labelled with its `.via` use case; a dashed derived `業務上の順番` edge where a flow's steps in one actor's lane use the screens in order | Use cases, fields, entities as nodes |
 | `information` | 情報モデル | Entities, `relate`, state models, variations | Columns (`er`) |
 | `condition` | バリエーション・条件 | Conditions with what they combine and apply to; variations with their values | Entities (a state model stands for its column) |

@@ -4,6 +4,11 @@
 
 ### Added
 
+- Business steps can cover existing conditions and variations. These are traceability
+  references, not implicit execution guards. Policy JSON now exports declared flows,
+  performers, covered references, and ordering edges, including cross-flow hand-offs.
+  A condition covered by a step in a BUC-owned flow has a business anchor for lint.
+
 - DTO fields support embedded DTOs, `List(T)`, and `Tuple(T)` with typed schema exports.
   Wire values that need punctuation may be quoted without relaxing bare identifier syntax.
 - Experimental Python code generation preserves declared constructor defaults and supports

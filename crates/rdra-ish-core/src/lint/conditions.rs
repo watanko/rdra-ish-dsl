@@ -15,8 +15,14 @@ use super::{push_element_lint, LintIssue, LintSeverity};
 /// guards one through `applies_to` a use case or an API, or `.when` on a `transitions` arm, a
 /// `chooses` value, or a `sets` value (each a `Guards` relation, see `check_write_guards`). A
 /// body a `forbidden` or `invariant` reads through `.when(Cond)` is that rule's condition
-/// and is exempt the same way.
+/// and is exempt the same way. A step in a BUC flow may cover a condition as an
+/// explicit business evaluation; that anchors it without making it an execution guard.
 pub(super) fn lint_condition_anchors(model: &SemanticModel, issues: &mut Vec<LintIssue>) {
+    let flow_steps: std::collections::HashSet<_> = model
+        .bucs
+        .keys()
+        .flat_map(|buc| crate::business_flow::buc_members(model, &[NodeRef::Buc(buc)]).1)
+        .collect();
     for (key, condition) in &model.conditions {
         if condition.body.is_none() || !crate::analysis::condition_edges(model, key).is_empty() {
             continue;
@@ -30,7 +36,12 @@ pub(super) fn lint_condition_anchors(model: &SemanticModel, issues: &mut Vec<Lin
                     || (rel.kind == RelKind::AppliesTo
                         && matches!(rel.to, NodeRef::UseCase(_) | NodeRef::Api(_))))
         });
-        if guards {
+        let covered_in_business_flow = model.relations.iter().any(|rel| {
+            rel.kind == RelKind::Covers
+                && rel.to == NodeRef::Condition(key)
+                && flow_steps.contains(&rel.from)
+        });
+        if guards || covered_in_business_flow {
             continue;
         }
         push_element_lint(

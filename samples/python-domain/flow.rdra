@@ -1,0 +1,40 @@
+module flow_policy
+
+actor Reviewer "Reviewer"
+business Applications "Review applications"
+buc ReviewApplications "Review an application"
+belongs(ReviewApplications, Applications)
+performs(Reviewer, ReviewApplications)
+
+entity ApplicationFacts "Observed facts" {
+  id: Int @pk
+  approved: Bool
+}
+
+variation ReviewChoice "Review outcome" {
+  accepted
+  rejected
+}
+
+condition Approved "An approved application"
+holds(Approved, ApplicationFacts.approved == true)
+
+usecase ReviewApplication "Review the supplied application"
+contains(ReviewApplications, ReviewApplication)
+reads(ReviewApplication, ApplicationFacts)
+
+flow ReviewFlow "Application review"
+contains(ReviewApplications, ReviewFlow)
+step InspectApplication "Inspect the application"
+step FinishReview "Finish the review"
+contains(ReviewFlow, InspectApplication)
+flow FinishFlow "Finish the review"
+contains(ReviewApplications, FinishFlow)
+contains(FinishFlow, FinishReview)
+performs(Reviewer, InspectApplication)
+performs(Reviewer, FinishReview)
+covers(InspectApplication, ReviewApplication)
+covers(InspectApplication, Approved)
+covers(InspectApplication, ReviewChoice)
+covers(FinishReview, ReviewApplication)
+precedes(InspectApplication, FinishReview)

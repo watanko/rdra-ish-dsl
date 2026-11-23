@@ -217,7 +217,7 @@ qualify the argument with a kind prefix — see [Kind-Qualified References](#kin
 | `branches` | `(Step, Step)` | The first step may branch to the second as an alternate path. |
 | `excepts` | `(Step, Step)` | The first step may route to the second as an exception path. |
 | `repeats` | `(Step, Step)` | The first step may loop back to the second. |
-| `covers` | `(Step, UseCase \| Api \| Event \| Timer)` | The business step covers the referenced use case, API, event, or timer. Use this to make UC ordering and event chains explicit in the DSL while keeping the step vocabulary business-facing. |
+| `covers` | `(Step, UseCase \| Api \| Event \| Timer \| Condition \| Variation)` | The business step covers a use case, API, event, timer, evaluated condition, or choice variation. Use this to make UC ordering and event chains explicit in the DSL while keeping the step vocabulary business-facing. |
 | `compensates` | `(UseCase, UseCase)` | The first use case compensates for or rolls back the business effect of the second. Use this for alternative or exception flow review without forcing compensation into CRUD/state derivation. |
 | `coordinates` | `(UseCase, Entity, Entity)` | The use case coordinates consistency for a relation crossing system boundaries. The use case must invoke APIs on both system sides that operate the corresponding entities. |
 | `belongs` | `(Buc, Business)` | The BUC belongs to the business. |
@@ -591,6 +591,10 @@ repeats(PaymentFailed, ReviewCart)
 covers(AuthorizePayment, CapturePayment)
 covers(PaymentFailed, PaymentRejected)
 ```
+
+A business step may also `covers(Step, Variation)` for a choice, or `covers(Step, Condition)` to identify the existing condition
+it evaluates. This is traceability, not an execution guard: it does not apply the
+condition to a use case or change lifecycle behavior.
 
 Use `precedes` for the main path, `branches` for alternatives, `excepts` for error
 or exception routes, and `repeats` for loops. `covers` is intentionally separate

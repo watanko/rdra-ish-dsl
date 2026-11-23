@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use super::{CheckStatus, Options};
 
+mod flows;
 mod python;
 pub(super) use python::print_python;
 
@@ -120,6 +121,7 @@ struct Policy {
     guards: Vec<Guard>,
     variations: Vec<Variation>,
     foreign_keys: Vec<ForeignKey>,
+    flows: Vec<flows::BusinessFlow>,
 }
 
 pub(super) fn print(model: &SemanticModel, options: &Options) -> Result<String, serde_json::Error> {
@@ -304,6 +306,7 @@ fn build(model: &SemanticModel, options: &Options) -> Policy {
         CheckStatus::Failed { errors } => errors.clone(),
     };
     Policy {
+        flows: flows::build(model),
         format_version: 1,
         source: options.model_path.clone(),
         fields,

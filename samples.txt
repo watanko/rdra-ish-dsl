@@ -32,3 +32,4 @@ samples/formal-verification/unwitnessed_state.rdra
 samples/formal-verification-fail/order.rdra
 samples/python-domain/model.rdra
 samples/python-domain/numeric_policy.rdra
+samples/python-domain/flow.rdra
