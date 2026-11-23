@@ -26,6 +26,8 @@ pub enum EffectValue {
     Bool(bool),
     /// Int / Money / Decimal への整数代入（TLA IntRange 向け）
     Int(i64),
+    /// The current clock value on a DateTime column.
+    Now,
     /// Nullable カラムが非null（値あり）
     Present,
     /// Nullable カラムが null
@@ -44,6 +46,7 @@ impl EffectValue {
             EffectValue::EnumVariant(v) => v.clone(),
             EffectValue::Bool(b) => b.to_string(),
             EffectValue::Int(n) => n.to_string(),
+            EffectValue::Now => "now".to_string(),
             EffectValue::Null => "null".to_string(),
             EffectValue::Present => "present".to_string(),
         }

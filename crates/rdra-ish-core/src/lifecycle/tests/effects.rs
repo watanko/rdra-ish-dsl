@@ -642,3 +642,28 @@ forbidden(Ticket, method == card, open == false)
         .expect("DefaultOnVariationIgnored");
     assert_eq!(info.severity(), crate::lifecycle::Severity::Info);
 }
+
+#[test]
+fn a_clock_effect_itself_introduces_the_clock() {
+    let model = model_from(
+        r#"
+entity Stamp "Stamp" { id: Int @pk recorded_at: DateTime }
+usecase Record "Record"
+creates(Record, Stamp)
+sets(Record, Stamp.recorded_at == now)
+"#,
+    );
+    let built = TransitionSystem::build(&model, Bounds::STATES, &Scope::ALL);
+    assert!(built.ts.now().is_some());
+    assert!(built
+        .ts
+        .actions()
+        .iter()
+        .any(|action| action.name == "Tick"));
+    let run = built.ts.run(Caps::VERIFY);
+    assert!(run.complete);
+    assert!(
+        run.states.len() > 6,
+        "recording must remain possible after ticks"
+    );
+}

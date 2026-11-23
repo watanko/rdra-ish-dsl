@@ -86,6 +86,10 @@ pub(crate) fn parse_effect_value(
         });
     }
 
+    if lit == "now" && col.col_type == ColumnType::DateTime {
+        return Ok(EffectValue::Now);
+    }
+
     match &col.col_type {
         ColumnType::Enum(variants) => {
             if variants.iter().any(|v| v == lit) {

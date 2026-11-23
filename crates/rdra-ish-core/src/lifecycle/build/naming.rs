@@ -180,7 +180,8 @@ impl Named {
     }
 
     fn value(&mut self, ek: EntityKey, column: &str, value: &EffectValue) {
-        if matches!(value, EffectValue::Int(_)) {
+        self.reads_now |= matches!(value, EffectValue::Now);
+        if matches!(value, EffectValue::Int(_) | EffectValue::Now) {
             self.number(ek, column);
         } else {
             self.name(ek, column);

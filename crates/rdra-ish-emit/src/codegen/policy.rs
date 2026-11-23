@@ -401,6 +401,7 @@ fn literal(value: &EffectValue) -> Operand {
             operand.kind = "integer".into();
             operand.integer = Some(*value);
         }
+        EffectValue::Now => operand.kind = "clock".into(),
         EffectValue::Null => operand.kind = "null".into(),
         EffectValue::Present => operand.kind = "present".into(),
     }

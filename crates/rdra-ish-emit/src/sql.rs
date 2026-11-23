@@ -937,6 +937,7 @@ fn literal(value: &EffectValue) -> String {
         EffectValue::Bool(false) => "FALSE".to_string(),
         EffectValue::Int(n) => n.to_string(),
         EffectValue::Null => "NULL".to_string(),
+        EffectValue::Now => "CURRENT_TIMESTAMP".to_string(),
         EffectValue::Present => "NULL".to_string(),
     }
 }

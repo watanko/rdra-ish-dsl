@@ -55,6 +55,44 @@ impl<'m> Builder<'m> {
                 continue;
             }
             let domain = decl.domain.clone();
+            if matches!(value, EffectValue::Now) {
+                if let Some(old) = prior_write(a, var, p) {
+                    self.diag(
+                        vec![ce.entity],
+                        StateDiag::ConflictingEffects {
+                            usecase: model.use_cases[uc].id.clone(),
+                            column: self.ts.var_name(var),
+                            sites: vec![old, site],
+                        },
+                    );
+                    continue;
+                }
+                let first = usize::from(matches!(domain, Domain::NullableInt));
+                a.effects.push(Effect::Choose {
+                    var,
+                    param: p,
+                    values: (first..domain.size(self.bounds))
+                        .map(|i| Choice {
+                            value: Value(i as u8),
+                            site: Some(site.clone()),
+                            conds: Vec::new(),
+                        })
+                        .collect(),
+                });
+                a.guards.push(Guard {
+                    pred: Pred::Cmp(
+                        Term::Slot {
+                            var,
+                            at: At::Next(p),
+                        },
+                        CmpOp::Eq,
+                        Term::Now,
+                    ),
+                    why: GuardWhy::Copy,
+                    site,
+                });
+                continue;
+            }
             let rhs = self.effect_value(&domain, value, &site, ce.entity);
             if let Some(ck) = ce.guard {
                 let values = match rhs {

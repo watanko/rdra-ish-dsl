@@ -121,6 +121,7 @@ pub(crate) fn effect_value_display(
         EffectValue::Int(n) => n.to_string(),
         EffectValue::Present => "present".to_string(),
         EffectValue::Null => "null".to_string(),
+        EffectValue::Now => "now".to_string(),
     }
 }
 

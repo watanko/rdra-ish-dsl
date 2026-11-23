@@ -82,6 +82,9 @@ impl<'m> Builder<'m> {
             }
             (Domain::Nullable, EffectValue::Null) => lit(Value::NULL),
             (Domain::Nullable, EffectValue::Present | EffectValue::Int(_)) => lit(Value::PRESENT),
+            (Domain::Int | Domain::NullableInt, EffectValue::Now) => {
+                Pred::Cmp(term, CmpOp::Eq, Term::Now)
+            }
             (Domain::Int | Domain::NullableInt, EffectValue::Int(n)) => {
                 Pred::Cmp(term, CmpOp::Eq, Term::Int(*n))
             }

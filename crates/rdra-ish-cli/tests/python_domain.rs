@@ -577,3 +577,134 @@ with create_engine('sqlite://').connect() as db:
 "#,
     );
 }
+
+#[test]
+fn clock_effects_use_the_supplied_clock_in_python_and_sql() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("model.rdra"),
+        r#"
+entity Stamp "Stamp" { id: Int @pk created_at: DateTime touched_at: DateTime @null enabled: Bool }
+usecase Open "Open"
+usecase Touch "Touch"
+creates(Open, Stamp)
+sets(Open, Stamp.created_at == now)
+sets(Open, Stamp.touched_at == null)
+updates(Touch, Stamp)
+condition Enabled "Enabled"
+holds(Enabled, Stamp.enabled == true)
+applies_to(Enabled, Touch)
+sets(Touch, Stamp.touched_at == now)
+"#,
+    )
+    .unwrap();
+    for (language, file) in [
+        ("py-policy", "policy.py"),
+        ("py-sql-policy", "sql_policy.py"),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+            .current_dir(dir.path())
+            .args(["codegen", "model.rdra", "--lang", language, "-o", file])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    python(
+        &dir,
+        r#"
+from datetime import datetime, timedelta
+from unittest import TestCase
+from sqlalchemy import create_engine, literal, select
+from sqlalchemy.pool import NullPool
+import policy as p
+import sql_policy as s
+with create_engine('sqlite://', poolclass=NullPool).connect() as db:
+    for offset in range(6):
+        now = datetime(2026, 1, 1) + timedelta(seconds=offset)
+        assert p.decide_open_created_at(now=now) == now
+        assert db.scalar(select(s.decide_open_created_at(now=literal(now)))) == now
+        for enabled in (False, True):
+            if enabled:
+                assert p.decide_touch_touched_at(stamp_enabled=enabled, now=now) == now
+            else:
+                with TestCase().assertRaises(ValueError):
+                    p.decide_touch_touched_at(stamp_enabled=enabled, now=now)
+            actual = db.scalar(select(s.decide_touch_touched_at(stamp_enabled=literal(enabled), now=literal(now))))
+            assert actual == (now if enabled else None)
+"#,
+    );
+}
+
+#[test]
+fn clock_effects_satisfy_tlc_after_assertions_at_both_instance_bounds() {
+    let available = Command::new("which")
+        .arg("tlc")
+        .output()
+        .unwrap()
+        .status
+        .success();
+    if !available {
+        assert_ne!(std::env::var("RDRA_REQUIRE_TLC").as_deref(), Ok("1"));
+        println!("skipped clock effects: tlc is not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+entity Stamp "Stamp" { id: Int @pk created_at: DateTime touched_at: DateTime @null }
+usecase Open "Open"
+usecase Touch "Touch"
+creates(Open, Stamp)
+sets(Open, Stamp.created_at == now)
+sets(Open, Stamp.touched_at == null)
+updates(Touch, Stamp)
+sets(Touch, Stamp.touched_at == now)
+after(Open).assert(Stamp.created_at == now, Stamp.touched_at == null)
+after(Touch).assert(Stamp.touched_at == now)
+"#;
+    let model = dir.path().join("model.rdra");
+    for count in ["1", "2"] {
+        for precise in [true, false] {
+            let source = if precise {
+                source.to_string()
+            } else {
+                source.replace(
+                    "sets(Touch, Stamp.touched_at == now)",
+                    "sets(Touch, Stamp.touched_at == present)",
+                )
+            };
+            std::fs::write(&model, source).unwrap();
+            let result = Command::new(env!("CARGO_BIN_EXE_rdra-ish"))
+                .current_dir(dir.path())
+                .env("TMPDIR", dir.path())
+                .args([
+                    "verify",
+                    "model.rdra",
+                    "--instance-count",
+                    count,
+                    "--deny-undecided",
+                ])
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert_eq!(result.status.success(), precise, "{stdout}{stderr}");
+            if precise {
+                assert!(stdout.contains("tlc_result: ok"), "{stdout}{stderr}");
+            } else {
+                assert_eq!(result.status.code(), Some(1), "{stdout}{stderr}");
+                assert!(
+                    stderr.contains("error[AfterAssert_Touch_1]"),
+                    "{stdout}{stderr}"
+                );
+                assert!(
+                    stderr.contains("tlc_result: counterexample"),
+                    "{stdout}{stderr}"
+                );
+            }
+        }
+    }
+}
